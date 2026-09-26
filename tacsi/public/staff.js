@@ -1,4 +1,5 @@
 const app = document.getElementById("app");
+const STATIC = Boolean(window.TACSI_STATIC);
 let pin = sessionStorageGet("tacsi-pin");
 let services = [];
 
@@ -36,6 +37,7 @@ function renderLogin(error = "") {
     ${error ? `<p class="warning-text">${esc(error)}</p>` : ""}
     <form id="login">
       <div class="field"><label for="pin">Staff PIN</label><input id="pin" type="password" inputmode="numeric" autocomplete="off"></div>
+      ${STATIC ? `<p class="hint">Demo PIN: 1234</p>` : ""}
       <button class="button">Sign in</button>
     </form>`;
   document.getElementById("login").addEventListener("submit", (e) => {
@@ -64,7 +66,7 @@ async function renderList() {
           <td>${esc(c.language)}</td><td>${new Date(c.createdAt).toLocaleString("en-GB")}</td><td><span class="tag tag--status">${esc(c.status)}</span></td></tr>`,
         )
         .join("")}</tbody></table>`
-        : `<p>No referrals yet. Complete a conversation on the <a href="/">citizen screen</a> and choose to send it to a support worker.</p>`
+        : `<p>No referrals yet. Complete a conversation on the <a href="./">citizen screen</a> and choose to send it to a support worker.</p>`
     }
     <button class="button button--secondary" id="refresh">Refresh</button>`;
   document.getElementById("refresh").addEventListener("click", route);
@@ -111,8 +113,8 @@ async function renderCase(ref) {
     <h2 class="heading-m">Update status</h2>
     <div class="button-row no-print">
       ${["new", "in-progress", "closed"].map((st) => `<button class="button ${st === c.status ? "" : "button--secondary"}" data-status="${st}">${st}</button>`).join("")}
-      <button class="button button--secondary" id="print">Print</button>
-      <button class="button button--secondary" id="download">Download JSON</button>
+      ${STATIC ? "" : `<button class="button button--secondary" id="print">Print</button>
+      <button class="button button--secondary" id="download">Download JSON</button>`}
     </div>`;
   app.querySelectorAll("[data-status]").forEach((b) =>
     b.addEventListener("click", async () => {
@@ -120,8 +122,8 @@ async function renderCase(ref) {
       renderCase(ref);
     }),
   );
-  document.getElementById("print").addEventListener("click", () => window.print());
-  document.getElementById("download").addEventListener("click", () => {
+  document.getElementById("print")?.addEventListener("click", () => window.print());
+  document.getElementById("download")?.addEventListener("click", () => {
     const blob = new Blob([JSON.stringify(c, null, 2)], { type: "application/json" });
     const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `${c.reference}.json` });
     a.click();

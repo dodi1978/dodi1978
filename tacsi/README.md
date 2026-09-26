@@ -30,6 +30,7 @@ ANTHROPIC_API_KEY=sk-ant-... npm start
 * Citizen screen: http://localhost:3000 (add `?place=Library` or similar)
 * Staff view: http://localhost:3000/staff. The PIN is `1234`. Change it with `TACSI_STAFF_PIN`.
 * Tests: `npm test`
+* Shareable demo: `npm run build:demo` builds a version that runs entirely in the browser (demo engine only, no microphone or printing) into `dist/demo/`, ready to publish as a single web page.
 
 ### Two engines
 

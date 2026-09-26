@@ -4,6 +4,8 @@ import { icon, TOPIC_ICONS } from "./icons.js";
 const TOPICS = ["housing", "money", "safety", "education", "immigration", "health", "benefits", "work"];
 const IDLE_MS = 3 * 60 * 1000;
 const IDLE_COUNTDOWN = 60;
+// Set by the static demo build, where microphone and printing are not available.
+const STATIC = Boolean(window.TACSI_STATIC);
 const PLACE = new URLSearchParams(location.search).get("place") || "Library";
 
 const $ = (id) => document.getElementById(id);
@@ -126,7 +128,7 @@ const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 
 function setupMic() {
-  if (!Recognition) return;
+  if (!Recognition || STATIC) return;
   $("mic").hidden = false;
   $("mic").addEventListener("click", () => {
     if (recognition) return recognition.stop();
@@ -154,7 +156,7 @@ function setupMic() {
 // ---------- Conversation ----------
 
 function startChat() {
-  $("demo-notice").hidden = !(mode === "demo" && state.lang !== "en");
+  $("demo-notice").hidden = mode !== "demo";
   addTacsi({ reply: tr("greeting"), reply_english: t("en", "greeting"), quick_replies: [], concepts: [], first_aid: [] });
   $("message").focus();
 }
@@ -301,7 +303,7 @@ function renderResult() {
     </div>
     <div class="button-row no-print" style="margin-top:-10px;margin-bottom:30px">
       <button type="button" class="button button--secondary" id="listen-all">${icon("speaker")}${esc(tr("listenAll"))}</button>
-      <button type="button" class="button button--secondary" id="print">${icon("print")}${esc(tr("print"))}</button>
+      ${STATIC ? "" : `<button type="button" class="button button--secondary" id="print">${icon("print")}${esc(tr("print"))}</button>`}
     </div>
     <section class="section"><h2 class="heading-m">${esc(tr("whatYouTold"))}</h2><p>${esc(c.summary)}</p></section>
     ${c.do_now.length ? `<section class="section"><h2 class="heading-m">${esc(tr("doNow"))}</h2><ul class="list-check">${c.do_now.map((x) => `<li>${icon("check")}<span>${esc(x)}</span></li>`).join("")}</ul></section>` : ""}
@@ -312,14 +314,14 @@ function renderResult() {
     <button type="button" class="button button--secondary no-print" id="start-again">${esc(tr("startAgain"))}</button>`;
 
   $("listen-all").addEventListener("click", () => speak($("result").innerText));
-  $("print").addEventListener("click", () => window.print());
+  $("print")?.addEventListener("click", () => window.print());
   $("start-again").addEventListener("click", reset);
   bindShare();
 }
 
 function shareForm() {
   if (state.reference) {
-    return `<h2 class="heading-m">${esc(tr("referenceTitle"))}</h2><p class="reference">${esc(state.reference)}</p><p>${esc(tr("referenceText"))}</p>`;
+    return `<h2 class="heading-m">${esc(tr("referenceTitle"))}</h2><p class="reference">${esc(state.reference)}</p><p>${esc(tr("referenceText"))}</p>${STATIC ? `<p lang="en"><a href="staff.html" target="_blank" rel="noopener">See what the support worker gets (staff view, PIN 1234)</a></p>` : ""}`;
   }
   return `<h2 class="heading-m">${esc(tr("shareTitle"))}</h2>
     <p>${esc(tr("shareText"))}</p>
@@ -363,10 +365,10 @@ function reset() {
 }
 
 function leave() {
-  if ("speechSynthesis" in window) speechSynthesis.cancel();
-  state = fresh();
-  document.body.innerHTML = "";
-  window.location.replace("https://www.bbc.co.uk/weather");
+  reset();
+  try {
+    window.location.replace("https://www.bbc.co.uk/weather");
+  } catch {}
 }
 
 let shiftPresses = [];
@@ -424,7 +426,7 @@ async function init() {
     show("chat");
   });
   $("tool-lang").addEventListener("click", () => {
-    if (!inUse() || confirm("Change language? This will start again.")) reset();
+    reset();
   });
   $("tool-read").addEventListener("click", (e) => {
     prefs.readAloud = !prefs.readAloud;
