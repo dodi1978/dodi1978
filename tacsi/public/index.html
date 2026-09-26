@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TACSI – help to find help</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a href="#main" class="skip-link" data-i18n="skipLink">Skip to main content</a>
+
+  <div class="exit-bar">
+    <button type="button" class="exit-button" id="exit" aria-describedby="exit-hint">
+      <span data-i18n="leave">Leave this page</span>
+    </button>
+    <span id="exit-hint" class="visually-hidden">Press Shift 3 times to leave quickly.</span>
+  </div>
+
+  <header class="header">
+    <div class="width-container header__inner">
+      <div class="brand">
+        <span class="brand__name">TACSI</span>
+        <span class="brand__tag" data-i18n="tagline">Help to find help</span>
+      </div>
+      <div class="toolbar">
+        <button type="button" class="tool" id="tool-lang" hidden><span data-icon="globe"></span><span data-i18n="changeLanguage">Language</span></button>
+        <button type="button" class="tool" id="tool-read" aria-pressed="false"><span data-icon="speaker"></span><span data-i18n="readAloud">Read aloud</span></button>
+        <button type="button" class="tool" id="tool-size" aria-pressed="false"><span class="tool__aa" aria-hidden="true">A+</span><span data-i18n="textSize">Bigger text</span></button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" class="width-container main" tabindex="-1">
+
+    <!-- 1. Language -->
+    <section class="screen" id="screen-language" aria-labelledby="h-language">
+      <h1 class="heading-l" id="h-language">Choose your language</h1>
+      <p class="lead-multi" aria-hidden="true">Wybierz język · Alege limba · اپنی زبان منتخب کریں · ভাষা বেছে নিন · اختر لغتك · Оберіть мову</p>
+      <div class="lang-grid" id="lang-grid"></div>
+      <details class="details">
+        <summary><span data-i18n="moreLanguages">More languages</span></summary>
+        <p class="hint" data-i18n="moreLanguagesHint"></p>
+        <div class="lang-grid lang-grid--small" id="lang-grid-more"></div>
+      </details>
+    </section>
+
+    <!-- 2. Welcome -->
+    <section class="screen" id="screen-welcome" aria-labelledby="h-welcome" hidden>
+      <h1 class="heading-l" id="h-welcome" tabindex="-1" data-i18n="welcomeTitle"></h1>
+      <p class="lead" data-i18n="welcomeLead"></p>
+      <ol class="steps">
+        <li><span data-icon="speaker" class="steps__icon"></span><span data-i18n="step1"></span></li>
+        <li><span data-icon="question" class="steps__icon"></span><span data-i18n="step2"></span></li>
+        <li><span data-icon="check" class="steps__icon"></span><span data-i18n="step3"></span></li>
+      </ol>
+      <div class="inset">
+        <p data-i18n="privacy"></p>
+        <p data-i18n="privacyMore"></p>
+      </div>
+      <button type="button" class="button button--start" id="start"><span data-i18n="start"></span> <span aria-hidden="true">→</span></button>
+    </section>
+
+    <!-- 3. Topics -->
+    <section class="screen" id="screen-topics" aria-labelledby="h-topics" hidden>
+      <h1 class="heading-l" id="h-topics" tabindex="-1" data-i18n="topicsTitle"></h1>
+      <p class="hint" data-i18n="topicsHint"></p>
+      <div class="topic-grid" id="topic-grid"></div>
+      <div class="button-row">
+        <button type="button" class="button" id="topics-continue" data-i18n="continue"></button>
+        <button type="button" class="button button--secondary" id="topics-skip" data-i18n="skip"></button>
+      </div>
+    </section>
+
+    <!-- 4. Conversation -->
+    <section class="screen" id="screen-chat" aria-labelledby="h-chat" hidden>
+      <h1 class="heading-m" id="h-chat" tabindex="-1" data-i18n="chatTitle"></h1>
+      <p class="notice" id="demo-notice" hidden data-i18n="demoNotice"></p>
+      <div class="urgent" id="urgent" hidden role="alert">
+        <span data-icon="warning" class="urgent__icon"></span>
+        <div>
+          <h2 class="heading-s" data-i18n="urgentTitle"></h2>
+          <p data-i18n="urgentText"></p>
+        </div>
+      </div>
+      <ol class="chat" id="chat" aria-live="polite" aria-relevant="additions"></ol>
+      <div class="quick" id="quick"></div>
+      <form class="composer" id="composer">
+        <label for="message" class="visually-hidden" data-i18n="typeHere"></label>
+        <textarea id="message" rows="2" autocomplete="off"></textarea>
+        <button type="button" class="round-button" id="mic" hidden><span data-icon="mic"></span><span class="visually-hidden" data-i18n="speak"></span></button>
+        <button type="submit" class="round-button round-button--send" id="send"><span data-icon="send"></span><span class="visually-hidden" data-i18n="send"></span></button>
+      </form>
+      <p class="mic-status" id="mic-status" aria-live="assertive"></p>
+      <button type="button" class="button button--secondary button--wide" id="finish" data-i18n="finish"></button>
+    </section>
+
+    <!-- 5. Result -->
+    <section class="screen" id="screen-result" aria-labelledby="h-result" hidden>
+      <div id="result"></div>
+    </section>
+
+    <!-- Loading -->
+    <div class="loading" id="loading" hidden>
+      <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span data-i18n="thinking"></span>
+    </div>
+  </main>
+
+  <dialog class="dialog" id="idle-dialog" aria-labelledby="idle-title">
+    <h2 class="heading-m" id="idle-title" data-i18n="stillThere"></h2>
+    <p data-i18n="stillThereText"></p>
+    <p class="countdown" id="idle-count"></p>
+    <button type="button" class="button" id="idle-stay" data-i18n="imHere"></button>
+  </dialog>
+
+  <footer class="footer width-container">
+    <p>TACSI prototype. Not for real personal data. <a href="/staff">Staff view</a></p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
