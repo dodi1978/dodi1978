@@ -100,6 +100,7 @@ const en = {
   micError: "The microphone did not work. You can type instead.",
   back: "Back",
   skipLink: "Skip to main content",
+  aiUnavailable: "TACSI could not use Claude for this answer, so it is asking simple fixed questions in English. If you were asked to allow Claude, choose Allow and start again.",
 };
 
 const pl = {

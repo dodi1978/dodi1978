@@ -46,7 +46,7 @@ test("asks what it is about when the topic is unclear", () => {
 
 test("scaffolds with one question at a time and gives first aid for debt", () => {
   const { result } = converse(["I owe council tax and a man said bailiffs are coming"]);
-  assert.match(result.reply, /Who do you owe money to/);
+  assert.match(result.reply, /main money problem/);
   assert.ok(result.first_aid.some((x) => /door/i.test(x)));
   assert.ok(result.concepts.length > 0);
 });
@@ -59,7 +59,7 @@ test("shows emergency help straight away when someone is not safe", () => {
 
 test("a full conversation reaches a referral with a staff report", () => {
   const { history, demoState, result } = converse(
-    ["My landlord gave me a section 21 letter", "I rent from a private landlord", "Yes", "Yes", "No, that's everything"],
+    ["My landlord gave me a section 21 letter", "I rent from a private landlord", "Yes", "Yes", "My children", "No, not yet", "I want to stay in my home", "No, that's all about this", "No, that's everything"],
   );
   assert.equal(result.ready_for_referral, true);
   const report = demoReport({ history, demoState });
@@ -68,6 +68,26 @@ test("a full conversation reaches a referral with a staff report", () => {
   assert.ok(report.citizen.referrals.some((r) => r.service_id === "shelter"));
   assert.equal(report.staff.priority, "high");
   assert.ok(report.citizen.words_to_know.some((w) => /Eviction/.test(w.term)));
+  assert.equal(report.staff.person_goals, "I want to stay in my home");
+});
+
+test("understands the main problem before asking about other problems", () => {
+  const replies = [];
+  const answers = ["I don't have any money and I can't feed my children", "I don't have enough money for food or bills", "No", "A few weeks", "My children", "No, not yet", "Food for my kids", "No, that's all about this"];
+  const history = [];
+  let demoState = null;
+  for (const text of answers) {
+    history.push({ role: "user", text });
+    const r = demoTurn({ history, session: {}, demoState });
+    demoState = r.state;
+    replies.push(r.result.reply);
+    history.push({ role: "assistant", text: r.result.reply });
+  }
+  const anythingElse = replies.findIndex((r) => /anything else worrying you/.test(r));
+  assert.equal(anythingElse, replies.length - 1, "asks about other problems only at the end");
+  assert.ok(!replies.some((r) => /Who do you owe money to/.test(r)), "does not ask about debts the person does not have");
+  assert.ok(!replies.some((r) => /bailiffs/.test(r)));
+  assert.ok(replies.some((r) => /What would you most like to happen/.test(r)));
 });
 
 test("picture buttons tapped before the chat guide the questions", () => {
@@ -97,4 +117,13 @@ test("AI output is normalised to known values, erring on the safe side", async (
   assert.deepEqual(report.citizen.referrals.map((r) => r.service_id), ["shelter"]);
   assert.equal(report.staff.presenting_issues[0].topic, "other");
   assert.equal(report.staff.referrals.length, 0);
+});
+
+test("a near-miss answer from Claude is kept, not thrown away", async () => {
+  const { coerceTurn } = await import("../src/conversation.js");
+  const turn = coerceTurn({ reply: "How long has this been going on?", risk: { level: "none" } });
+  assert.equal(turn.reply, "How long has this been going on?");
+  assert.deepEqual(turn.quick_replies, []);
+  assert.equal(turn.ready_for_referral, false);
+  assert.throws(() => coerceTurn({ quick_replies: ["Yes"] }));
 });

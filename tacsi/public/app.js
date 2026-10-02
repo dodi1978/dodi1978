@@ -237,6 +237,7 @@ async function sendMessage(text) {
     const data = await api("/api/turn", { history: state.history, session: session(), demoState: state.demoState });
     state.demoState = data.demoState;
     state.engine = data.engine;
+    if (data.engine === "demo-fallback") $("demo-notice").textContent = tr("aiUnavailable");
     if (data.engine !== "ai") $("demo-notice").hidden = false;
     const lastUser = state.history.findLast((m) => m.role === "user");
     if (lastUser) lastUser.english = data.result.user_message_english || text;

@@ -11,7 +11,7 @@ import { z } from "zod";
 import { demoTurn, demoReport, detectRisk } from "../src/demo.js";
 import { SYSTEM_PROMPT } from "../src/prompt.js";
 import { TurnSchema, ReportSchema } from "../src/schemas.js";
-import { toMessages, reportRequest, normaliseTurn, normaliseReport } from "../src/conversation.js";
+import { toMessages, reportRequest, coerceTurn, coerceReport } from "../src/conversation.js";
 import { SERVICES } from "../src/knowledge/services.js";
 import { CONCEPTS } from "../src/knowledge/concepts.js";
 
@@ -30,14 +30,11 @@ let aiOff = false;
 const formatNote = (schema) =>
   `Reply with only one JSON object, no other text, matching this JSON Schema:\n${JSON.stringify(z.toJSONSchema(schema))}`;
 
-async function askClaude(turns, schema, modelTier) {
+async function askClaude(turns, coerce, modelTier) {
   const sample = aiOff ? null : await samplePromise;
   if (!sample) throw new Error("Claude is not available here");
   try {
-    const raw = await sample.json(turns, { cache: false, modelTier });
-    const parsed = schema.safeParse(raw);
-    if (!parsed.success) throw new Error("Answer did not match the expected format");
-    return parsed.data;
+    return coerce(await sample.json(turns, { cache: false, modelTier }));
   } catch (e) {
     if (PERMANENT.has(e?.code)) aiOff = true;
     throw e;
@@ -51,7 +48,7 @@ async function turn(body) {
     const messages = toMessages(body.history, session);
     const instructions = `${SYSTEM_PROMPT}\n\n${formatNote(TurnSchema)}`;
     // "quick" keeps the conversation responsive; the report uses the default tier.
-    const result = normaliseTurn(await askClaude([{ role: "user", content: instructions }, ...messages], TurnSchema, "quick"));
+    const result = await askClaude([{ role: "user", content: instructions }, ...messages], coerceTurn, "quick");
     const lastUser = [...body.history].reverse().find((m) => m.role === "user")?.text ?? "";
     const keywordRisk = detectRisk(lastUser);
     if (keywordRisk.level === "immediate" && result.risk.level !== "immediate") result.risk = keywordRisk;
@@ -65,7 +62,7 @@ async function turn(body) {
 async function report(body) {
   try {
     const content = `${SYSTEM_PROMPT}\n\n${reportRequest({ history: body.history, session: body.session ?? {} })}\n\n${formatNote(ReportSchema)}`;
-    return { engine: "ai", report: normaliseReport(await askClaude([{ role: "user", content }], ReportSchema, "default")) };
+    return { engine: "ai", report: await askClaude([{ role: "user", content }], coerceReport, "default") };
   } catch (e) {
     console.warn("Claude report failed, using demo engine:", e?.code ?? e?.message);
     return { engine: "demo-fallback", report: demoReport(body) };

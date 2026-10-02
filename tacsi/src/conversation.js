@@ -52,3 +52,62 @@ export function normaliseReport(report) {
   s.referrals = s.referrals.filter((r) => known.has(r.service_id));
   return report;
 }
+
+// The link version gets plain JSON back, not schema-enforced output. Fill
+// gaps with safe defaults so one missing field does not throw away a good
+// answer; only a missing reply (or report summary) counts as a failure.
+const str = (v) => (typeof v === "string" ? v : v == null ? "" : String(v));
+const strs = (v) => (Array.isArray(v) ? v.map(str).filter(Boolean) : []);
+const obj = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
+const terms = (v) => (Array.isArray(v) ? v.map(obj).filter((c) => c.term).map((c) => ({ term: str(c.term), explanation: str(c.explanation) })) : []);
+
+export function coerceTurn(raw) {
+  const t = obj(raw);
+  if (!str(t.reply).trim()) throw new Error("Answer had no reply");
+  return normaliseTurn({
+    reply: str(t.reply),
+    reply_english: str(t.reply_english) || str(t.reply),
+    user_message_english: str(t.user_message_english),
+    quick_replies: strs(t.quick_replies),
+    concepts: terms(t.concepts),
+    topics: strs(t.topics),
+    risk: { level: str(obj(t.risk).level), reason: str(obj(t.risk).reason) },
+    first_aid: strs(t.first_aid),
+    ready_for_referral: t.ready_for_referral === true,
+  });
+}
+
+export function coerceReport(raw) {
+  const c = obj(obj(raw).citizen);
+  const s = obj(obj(raw).staff);
+  if (!str(c.summary).trim()) throw new Error("Report had no summary");
+  return normaliseReport({
+    citizen: {
+      summary: str(c.summary),
+      referrals: (Array.isArray(c.referrals) ? c.referrals : []).map(obj).map((r) => ({
+        service_id: str(r.service_id),
+        why: str(r.why),
+        what_to_say: str(r.what_to_say),
+        what_to_bring: strs(r.what_to_bring),
+      })),
+      do_now: strs(c.do_now),
+      dont: strs(c.dont),
+      words_to_know: terms(c.words_to_know),
+    },
+    staff: {
+      headline: str(s.headline) || "TACSI referral",
+      priority: str(s.priority),
+      priority_reason: str(s.priority_reason),
+      triage_types: strs(s.triage_types),
+      presenting_issues: (Array.isArray(s.presenting_issues) ? s.presenting_issues : []).map(obj).map((i) => ({ topic: str(i.topic), description: str(i.description) })),
+      key_facts: strs(s.key_facts),
+      deadlines: strs(s.deadlines),
+      safeguarding_flags: strs(s.safeguarding_flags),
+      access_needs: strs(s.access_needs),
+      person_goals: str(s.person_goals),
+      unknowns: strs(s.unknowns),
+      recommended_actions: strs(s.recommended_actions),
+      referrals: (Array.isArray(s.referrals) ? s.referrals : []).map(obj).map((r) => ({ service_id: str(r.service_id), rationale: str(r.rationale) })),
+    },
+  });
+}

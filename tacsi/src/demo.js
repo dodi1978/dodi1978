@@ -19,7 +19,7 @@ const KEYWORDS = {
 };
 
 const IMMEDIATE = ["kill me", "kill myself", "end my life", "suicide", "going to kill", "he is here now", "she is here now", "bleeding", "can't breathe", "cannot breathe", "not safe now", "not safe tonight", "hurting me now", "take my own life"];
-const CONCERN = ["hit", "hits", "hurt", "scared", "afraid", "threat", "bailiff", "homeless", "evict", "abuse", "no food", "sleeping rough", "controls"];
+const CONCERN = ["hit", "hits", "hurt", "scared", "afraid", "threat", "bailiff", "homeless", "evict", "abuse", "no food", "sleeping rough", "controls", "can't feed", "cannot feed", "can't buy food", "cannot buy food"];
 
 const TOPIC_LABELS = {
   housing: "Home and housing",
@@ -41,9 +41,11 @@ const QUESTIONS = {
     { key: "children", q: "Are there children living with you?", options: ["Yes", "No"] },
   ],
   money: [
-    { key: "owe_to", q: "Who do you owe money to? You can choose more than one by typing.", options: ["Council tax", "Rent", "Energy bills", "Loans or credit cards", "I'm not sure"] },
-    { key: "court_bailiffs", q: "Has anyone sent a court letter, or said bailiffs will come?", options: ["Yes", "No", "I'm not sure"] },
+    { key: "money_kind", q: "What is the main money problem?", options: ["I don't have enough money for food or bills", "I owe money", "My benefits have stopped or are late", "I'm not sure"] },
+    { key: "owe_to", q: "Who do you owe money to? You can choose more than one by typing.", options: ["Council tax", "Rent", "Energy bills", "Loans or credit cards", "I'm not sure"], when: (s) => owesMoney(s) },
+    { key: "court_bailiffs", q: "Has anyone sent a court letter, or said bailiffs will come?", options: ["Yes", "No", "I'm not sure"], when: (s) => owesMoney(s) },
     { key: "food_heat", q: "Do you have enough money for food and heating this week?", options: ["Yes", "No"] },
+    { key: "how_long", q: "How long has money been a problem?", options: ["A few days", "A few weeks", "Months or longer"] },
   ],
   housing: [
     { key: "tenure", q: "Do you rent your home, or own it?", options: ["I rent from a private landlord", "I rent from the council or housing association", "I own it", "I don't have a home"] },
@@ -120,12 +122,34 @@ function newState(session) {
   return { topics: [...(session?.topics ?? [])].filter((t) => QUESTIONS[t]), queue: [], answers: {}, asked: [], risk: { level: "none", reason: "" }, stage: "start", firstAidShown: [] };
 }
 
+// Asked once, after the topic questions and before "anything else", so the
+// main problem is understood before moving on.
+const GENERAL = [
+  { key: "household", q: "Who lives with you?", options: ["I live alone", "My partner", "My children", "Other family or friends"] },
+  { key: "tried", q: "Have you already asked anyone for help with this?", options: ["No, not yet", "Yes, the council", "Yes, a charity or advice service", "Yes, someone else"] },
+  { key: "goal", q: "What would you most like to happen? You can say it in your own words.", options: [] },
+  { key: "more", q: "Is there anything else about this that I should know? For example, a date, a letter, or something that makes it harder for you.", options: ["No, that's all about this"] },
+];
+
+function allUserText(state) {
+  return [state.firstText ?? "", ...Object.values(state.answers)].join(" ");
+}
+
+function owesMoney(state) {
+  const kind = state.answers["money.money_kind"] ?? "";
+  if (/not in debt|don't owe|do not owe|no debt/i.test(allUserText(state))) return false;
+  return /owe|debt/i.test(kind) || includesAny(allUserText(state), ["owe", "debt", "bailiff", "arrears", "council tax", "loan"]);
+}
+
 function nextQuestion(state) {
-  for (const topic of ORDER) {
-    if (!state.topics.includes(topic)) continue;
-    for (const q of QUESTIONS[topic]) {
+  const groups = ORDER.filter((t) => state.topics.includes(t)).map((t) => [t, QUESTIONS[t]]);
+  groups.push(["general", GENERAL]);
+  for (const [topic, questions] of groups) {
+    for (const q of questions) {
       const id = `${topic}.${q.key}`;
-      if (!state.asked.includes(id)) return { id, topic, ...q };
+      if (state.asked.includes(id)) continue;
+      if (q.when && !q.when(state)) continue;
+      return { id, topic, ...q };
     }
   }
   return null;
@@ -157,6 +181,7 @@ export function demoTurn({ history, session, demoState }) {
   // Record the answer to the question we asked last time.
   const pending = state.asked.at(-1);
   if (pending && state.stage === "asking") state.answers[pending] = text;
+  state.firstText ??= text;
 
   for (const t of detectTopics(text)) if (!state.topics.includes(t)) state.topics.push(t);
   state.risk = maxRisk(state.risk, detectRisk(text));
@@ -170,7 +195,8 @@ export function demoTurn({ history, session, demoState }) {
   const concepts = findConceptsInText(text).slice(0, 2).map((c) => ({ term: c.term, explanation: `${c.plain} ${c.matters}` }));
   const firstAid = [];
   for (const t of state.topics) {
-    if (FIRST_AID[t] && !state.firstAidShown.includes(t) && (state.risk.level !== "none" || t === "money" || t === "housing")) {
+    const relevant = t === "money" ? owesMoney(state) : state.risk.level !== "none" || t === "housing";
+    if (FIRST_AID[t] && !state.firstAidShown.includes(t) && relevant) {
       firstAid.push(...FIRST_AID[t]);
       state.firstAidShown.push(t);
     }
@@ -229,8 +255,10 @@ export function demoTurn({ history, session, demoState }) {
   });
 }
 
-function answer(state, id) {
-  return state.answers[id];
+function questionText(id) {
+  const [topic, key] = id.split(".");
+  const q = (topic === "general" ? GENERAL : QUESTIONS[topic] ?? []).find((x) => x.key === key);
+  return q ? `${q.q.split("?")[0]}?` : `${id}:`;
 }
 
 export function demoReport({ history, demoState }) {
@@ -277,11 +305,14 @@ export function demoReport({ history, demoState }) {
       priority_reason: risk.level !== "none" ? risk.reason : hasDeadline ? "Person reports a letter with a deadline." : "No immediate risk or deadline reported.",
       triage_types: [topics.length > 1 ? "global" : "service-level", ...(state.firstAidShown.length ? ["first-aid"] : [])],
       presenting_issues: topics.map((t) => ({ topic: t, description: TOPIC_LABELS[t] })),
-      key_facts: Object.entries(state.answers).map(([k, v]) => `${k}: ${v}`),
+      key_facts: [
+        ...(state.firstText ? [`In their own words: "${state.firstText}"`] : []),
+        ...state.asked.filter((id) => id in state.answers && id !== "general.goal").map((id) => `${questionText(id)} ${state.answers[id]}`),
+      ],
       deadlines: hasDeadline ? ["Person has a letter with a deadline - date not recorded."] : [],
       safeguarding_flags: risk.level !== "none" ? [risk.reason] : [],
       access_needs: ["Not assessed in demo mode - check language, reading and digital needs."],
-      person_goals: "Not captured in demo mode - ask the person what they want to happen.",
+      person_goals: state.answers["general.goal"] || "Not captured - ask the person what they want to happen.",
       unknowns: ["Exact dates on any letters", "Household make-up", "Income and benefits", "What the person has already tried"],
       recommended_actions: [
         priority === "urgent" ? "Contact the person the same day. Follow your safeguarding procedure." : "Contact the person within your normal service standard.",
