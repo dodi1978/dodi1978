@@ -25,6 +25,9 @@ const fresh = () => ({
   report: null,
   reference: null,
   busy: false,
+  // Help boxes already shown in the chat; after that they live behind "See advice again".
+  advice: { urgent: false, tips: [], concepts: [] },
+  aiErrors: [],
 });
 let state = fresh();
 let prefs = { readAloud: false, largeText: false };
@@ -161,27 +164,72 @@ function startChat() {
   $("message").focus();
 }
 
+// ---------- Help boxes: shown once, then kept behind "See advice again" ----------
+
+const sameText = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+const urgentHtml = (cls = "") => `<div class="urgent ${cls}" role="alert"><span class="urgent__icon">${icon("warning")}</span>
+  <div><h2 class="heading-s">${esc(tr("urgentTitle"))}</h2><p>${esc(tr("urgentText"))}</p></div></div>`;
+const tipsHtml = (tips) =>
+  tips.length ? `<div class="first-aid"><h2 class="heading-s">${esc(tr("doNow"))}</h2><ul>${tips.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : "";
+const conceptHtml = (c) => `<details class="concept"><summary>${icon(conceptIcon(c.term))}<span>${esc(tr("whatDoesThisMean"))} “${esc(c.term)}”</span></summary>
+  <div class="concept__body"><p>${esc(c.explanation)}</p><button type="button" class="link-button" data-say-text="${esc(`${c.term}. ${c.explanation}`)}">${icon("speaker")}${esc(tr("listen"))}</button></div></details>`;
+
+function bindSay(root) {
+  root.querySelectorAll("[data-say-text]").forEach((b) => b.addEventListener("click", () => speak(b.dataset.sayText)));
+}
+
+function renderAdvicePanel() {
+  const a = state.advice;
+  const count = a.tips.length + a.concepts.length + (a.urgent ? 1 : 0);
+  $("advice").hidden = count === 0;
+  $("advice-panel").innerHTML = `<h2 class="heading-s">${esc(tr("adviceTitle"))}</h2>${a.urgent ? urgentHtml() : ""}${tipsHtml(a.tips)}${a.concepts.map(conceptHtml).join("")}`;
+  bindSay($("advice-panel"));
+}
+
 function addTacsi(result) {
   state.history.push({ role: "assistant", text: result.reply, english: result.reply_english });
+  const a = state.advice;
+  const newTips = (result.first_aid ?? []).filter((x) => x && !a.tips.some((y) => sameText(x, y)));
+  const newConcepts = (result.concepts ?? []).filter((c) => c.term && !a.concepts.some((y) => sameText(c.term, y.term)));
+  const showUrgent = result.risk?.level === "immediate" && !a.urgent;
+  a.tips.push(...newTips);
+  a.concepts.push(...newConcepts);
+  if (showUrgent) a.urgent = true;
+
   const li = document.createElement("li");
   li.className = "msg msg--tacsi";
   li.innerHTML = `
     <div class="msg__who">TACSI</div>
     <div class="msg__bubble">${esc(result.reply)}</div>
     <div class="msg__actions"><button type="button" class="link-button" data-say>${icon("speaker")}${esc(tr("listen"))}</button></div>
-    ${(result.first_aid ?? []).length ? `<div class="first-aid"><h2 class="heading-s">${esc(tr("doNow"))}</h2><ul>${result.first_aid.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
-    ${(result.concepts ?? [])
-      .map(
-        (c) => `<details class="concept"><summary>${icon(conceptIcon(c.term))}<span>${esc(tr("whatDoesThisMean"))} “${esc(c.term)}”</span></summary>
-        <div class="concept__body"><p>${esc(c.explanation)}</p><button type="button" class="link-button" data-say-text="${esc(`${c.term}. ${c.explanation}`)}">${icon("speaker")}${esc(tr("listen"))}</button></div></details>`,
-      )
-      .join("")}`;
+    ${showUrgent ? urgentHtml("urgent--inline") : ""}
+    ${tipsHtml(newTips)}
+    ${newConcepts.map(conceptHtml).join("")}`;
   li.querySelector("[data-say]").addEventListener("click", () => speak(result.reply));
-  li.querySelectorAll("[data-say-text]").forEach((b) => b.addEventListener("click", () => speak(b.dataset.sayText)));
+  bindSay(li);
   $("chat").append(li);
   renderQuick(result.quick_replies ?? []);
-  if (result.risk?.level === "immediate") $("urgent").hidden = false;
+  // After the first warning, a short line stays at the top instead of the full box.
+  if (a.urgent) $("urgent").hidden = false;
+  renderAdvicePanel();
   if (prefs.readAloud) speak(result.reply);
+  li.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Claude did not answer this time: say so in the chat and let the person retry.
+function addRetryNote() {
+  const li = document.createElement("li");
+  li.className = "msg msg--tacsi msg--note";
+  li.innerHTML = `<div class="msg__who">TACSI</div><div class="msg__bubble">${esc(tr("aiHiccup"))}</div>`;
+  $("chat").append(li);
+  renderQuick([]);
+  $("quick").innerHTML = `<button type="button" class="chip">${esc(tr("tryAgain"))}</button>`;
+  $("quick").querySelector(".chip").addEventListener("click", () => {
+    li.remove();
+    renderQuick([]);
+    requestTurn();
+  });
   li.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -231,10 +279,24 @@ async function sendMessage(text) {
   if (!text || state.busy) return;
   $("message").value = "";
   renderQuick([]);
-  addUser(text);
+  // A new message replaces a pending "Try again" note.
+  $("chat").querySelectorAll(".msg--note").forEach((n) => n.remove());
+  if (state.history.at(-1)?.role === "user") state.history.at(-1).text += `\n${text}`;
+  else addUser(text);
+  if (state.history.at(-1)?.text !== text) $("chat").lastElementChild.querySelector(".msg__bubble").textContent = state.history.at(-1).text;
+  await requestTurn();
+}
+
+async function requestTurn() {
+  const text = state.history.at(-1)?.text ?? "";
   setBusy(true);
   try {
     const data = await api("/api/turn", { history: state.history, session: session(), demoState: state.demoState });
+    if (data.engine === "ai-error") {
+      state.aiErrors.push(data.code ?? "unknown");
+      addRetryNote();
+      return;
+    }
     state.demoState = data.demoState;
     state.engine = data.engine;
     if (data.engine === "demo-fallback") $("demo-notice").textContent = tr("aiUnavailable");
@@ -245,10 +307,8 @@ async function sendMessage(text) {
     if (data.result.ready_for_referral) await finish();
   } catch (err) {
     console.error(err);
-    state.history.pop();
-    $("chat").lastElementChild?.remove();
-    $("message").value = text;
-    $("mic-status").textContent = tr("error");
+    state.aiErrors.push("network");
+    addRetryNote();
   } finally {
     setBusy(false);
   }
@@ -337,7 +397,14 @@ function bindShare() {
   consent.addEventListener("change", () => ($("share-button").disabled = !consent.checked));
   $("share-button").addEventListener("click", async () => {
     try {
-      const data = await api("/api/cases", { consent: true, session: session(), report: state.report, history: state.history, engine: state.engine });
+      const data = await api("/api/cases", {
+        consent: true,
+        session: session(),
+        report: state.report,
+        history: state.history,
+        engine: state.engine,
+        diagnostics: { aiErrors: state.aiErrors },
+      });
       state.reference = data.reference;
       $("share").innerHTML = shareForm();
       $("share").querySelector("h2").setAttribute("tabindex", "-1");
@@ -359,6 +426,9 @@ function reset() {
   $("quick").innerHTML = "";
   $("result").innerHTML = "";
   $("urgent").hidden = true;
+  $("advice").hidden = true;
+  $("advice-panel").hidden = true;
+  $("advice-toggle").setAttribute("aria-expanded", "false");
   $("message").value = "";
   $("mic-status").textContent = "";
   $("tool-lang").hidden = true;
@@ -441,6 +511,12 @@ async function init() {
     prefs.largeText = !prefs.largeText;
     document.documentElement.classList.toggle("large-text", prefs.largeText);
     e.currentTarget.setAttribute("aria-pressed", prefs.largeText);
+  });
+  $("advice-toggle").addEventListener("click", () => {
+    const open = $("advice-panel").hidden;
+    $("advice-panel").hidden = !open;
+    $("advice-toggle").setAttribute("aria-expanded", String(open));
+    if (open) renderAdvicePanel();
   });
   $("composer").addEventListener("submit", (e) => {
     e.preventDefault();

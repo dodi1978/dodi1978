@@ -96,6 +96,18 @@ const FIRST_AID = {
   immigration: ["Do not ignore Home Office letters. Get free advice before the deadline."],
 };
 
+// One-line answers for when someone raises a new topic mid-conversation.
+const TOPIC_TIPS = {
+  work: "The National Careers Service can help you look for work, for free.",
+  money: "Free debt and money advice is available.",
+  housing: "Free housing advice is available.",
+  benefits: "Citizens Advice can help you check what benefits you can get.",
+  safety: "If you are in danger now, call 999.",
+  education: "There is free advice about school places and support.",
+  immigration: "There is free advice about visas and immigration.",
+  health: "If it is urgent, you can call NHS 111.",
+};
+
 const ORDER = ["safety", "housing", "money", "immigration", "education", "benefits", "health", "work", "other"];
 
 function includesAny(text, words) {
@@ -141,8 +153,14 @@ function owesMoney(state) {
   return /owe|debt/i.test(kind) || includesAny(allUserText(state), ["owe", "debt", "bailiff", "arrears", "council tax", "loan"]);
 }
 
+function isQuestion(text) {
+  return /\?\s*$/.test(text.trim()) || /^(how|what|where|who|why|when|can i|can you|could|should i|do i|is there)\b/i.test(text.trim());
+}
+
 function nextQuestion(state) {
-  const groups = ORDER.filter((t) => state.topics.includes(t)).map((t) => [t, QUESTIONS[t]]);
+  // A topic the person just raised comes first, then the rest in priority order.
+  const order = state.focus ? [state.focus, ...ORDER.filter((t) => t !== state.focus)] : ORDER;
+  const groups = order.filter((t) => state.topics.includes(t)).map((t) => [t, QUESTIONS[t]]);
   groups.push(["general", GENERAL]);
   for (const [topic, questions] of groups) {
     for (const q of questions) {
@@ -178,12 +196,41 @@ export function demoTurn({ history, session, demoState }) {
   const last = [...history].reverse().find((m) => m.role === "user");
   const text = last?.text ?? "";
 
-  // Record the answer to the question we asked last time.
-  const pending = state.asked.at(-1);
-  if (pending && state.stage === "asking") state.answers[pending] = text;
-  state.firstText ??= text;
+  // A new problem, or a question of their own, instead of an answer.
+  const known = state.topics.length > 0;
+  const mentioned = detectTopics(text);
+  const newTopics = mentioned.filter((t) => !state.topics.includes(t));
+  const asksQuestion = isQuestion(text);
+  const currentTopic = state.stage === "asking" ? state.asked.at(-1)?.split(".")[0] : null;
+  // Switch when they raise a different topic (new, or one with questions still to ask)
+  // instead of answering about the current one.
+  const switchTo =
+    known && currentTopic && !mentioned.includes(currentTopic)
+      ? mentioned.find((t) => newTopics.includes(t) || QUESTIONS[t]?.some((q) => !state.asked.includes(`${t}.${q.key}`)))
+      : undefined;
+  const changedTopic = Boolean(switchTo);
 
-  for (const t of detectTopics(text)) if (!state.topics.includes(t)) state.topics.push(t);
+  // Record the answer to the question we asked last time. If they changed
+  // topic instead, leave that question to come back to later.
+  const pending = state.asked.at(-1);
+  const pendingTopic = pending?.split(".")[0];
+  if (pending && state.stage === "asking") {
+    if (changedTopic || asksQuestion) state.asked.pop();
+    else state.answers[pending] = text;
+  }
+  state.firstText ??= text;
+  if (asksQuestion) (state.questions ??= []).push(text);
+
+  for (const t of newTopics) state.topics.push(t);
+  let ack = "";
+  if (changedTopic) {
+    const previous = pendingTopic;
+    state.focus = switchTo;
+    const back = previous && previous !== "general" && TOPIC_LABELS[previous] ? ` Then we can come back to ${TOPIC_LABELS[previous].toLowerCase()}.` : "";
+    ack = `You also need help with ${TOPIC_LABELS[switchTo].toLowerCase()}. ${TOPIC_TIPS[switchTo] ?? ""} Let me ask about that now.${back} `.replace(/ {2,}/g, " ");
+  } else if (asksQuestion && known) {
+    ack = "That is a good question. I will add it to your notes so a support worker can answer it. ";
+  }
   state.risk = maxRisk(state.risk, detectRisk(text));
   if (pending === "safety.safe_now" && /^no\b/i.test(text.trim())) {
     state.risk = { level: "immediate", reason: "Person said they are not safe right now." };
@@ -192,7 +239,12 @@ export function demoTurn({ history, session, demoState }) {
     state.risk = maxRisk(state.risk, { level: "concern", reason: "No safe place to sleep tonight." });
   }
 
-  const concepts = findConceptsInText(text).slice(0, 2).map((c) => ({ term: c.term, explanation: `${c.plain} ${c.matters}` }));
+  // Explain each UK idea only once per conversation.
+  state.conceptsShown ??= [];
+  const concepts = findConceptsInText(text)
+    .filter((c) => !state.conceptsShown.includes(c.id))
+    .slice(0, 2)
+    .map((c) => (state.conceptsShown.push(c.id), { term: c.term, explanation: `${c.plain} ${c.matters}` }));
   const firstAid = [];
   for (const t of state.topics) {
     const relevant = t === "money" ? owesMoney(state) : state.risk.level !== "none" || t === "housing";
@@ -221,7 +273,7 @@ export function demoTurn({ history, session, demoState }) {
       state.stage = "done";
       return turn(state, "Thank you. I have what I need. Here is where you can get help.", { ready: true, concepts, first_aid: firstAid, userEnglish: text });
     }
-    if (/^yes$/i.test(text.trim())) {
+    if (/^yes\b/i.test(text.trim())) {
       return turn(state, "Please tell me about it. You can type, or tap the microphone and speak.", { concepts, userEnglish: text });
     }
     if (!state.topics.length) state.topics.push("other");
@@ -238,11 +290,21 @@ export function demoTurn({ history, session, demoState }) {
     });
   }
 
+  if (/what (do|should|can) i do|what now|what happens now/i.test(text)) {
+    state.stage = "anything_else";
+    return turn(state, `I can show you where to get help now. Is there anything else you want to tell me first?`, {
+      quick_replies: ["Show me where to get help", "Yes, there is something else"],
+      concepts,
+      first_aid: firstAid,
+      userEnglish: text,
+    });
+  }
+
   const q = nextQuestion(state);
   if (q) {
     state.stage = "asking";
     state.asked.push(q.id);
-    const ack = state.asked.length === 1 ? "Thank you. I will ask a few short questions so I can find the right help. " : "";
+    if (!ack && state.asked.length === 1) ack = "Thank you. I will ask a few short questions so I can find the right help. ";
     return turn(state, `${ack}${q.q}`, { quick_replies: q.options, concepts, first_aid: firstAid, userEnglish: text });
   }
 
@@ -315,6 +377,7 @@ export function demoReport({ history, demoState }) {
       person_goals: state.answers["general.goal"] || "Not captured - ask the person what they want to happen.",
       unknowns: ["Exact dates on any letters", "Household make-up", "Income and benefits", "What the person has already tried"],
       recommended_actions: [
+        ...(state.questions ?? []).map((q) => `Answer the person's question: "${q}"`),
         priority === "urgent" ? "Contact the person the same day. Follow your safeguarding procedure." : "Contact the person within your normal service standard.",
         "Confirm the facts above with the person, using an interpreter if needed.",
         ...(topics.length > 1 ? ["Coordinate referrals across services - several linked needs."] : []),

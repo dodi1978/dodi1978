@@ -45,6 +45,10 @@ function validHistory(history) {
 
 const rank = { none: 0, concern: 1, immediate: 2 };
 
+function permanentFailure(err) {
+  return [401, 403, 404].includes(err?.status);
+}
+
 function useAI(body) {
   return aiConfigured() && body.engine !== "demo";
 }
@@ -65,8 +69,11 @@ async function handleTurn(body) {
     }
     return { engine: "ai", result, demoState: demo.state };
   } catch (err) {
-    console.error("AI turn failed, using demo engine:", err.message);
-    return { engine: "demo-fallback", result: demo.result, demoState: demo.state };
+    console.error("AI turn failed:", err.message);
+    // A bad key or missing access will not fix itself: carry on with the demo engine.
+    if (permanentFailure(err)) return { engine: "demo-fallback", result: demo.result, demoState: demo.state, code: "unavailable" };
+    // Otherwise let the person try again rather than switching engines mid-conversation.
+    return { engine: "ai-error", code: err.status ? `http_${err.status}` : "error" };
   }
 }
 
@@ -77,8 +84,9 @@ async function handleReport(body) {
   try {
     return { engine: "ai", report: await aiReport({ history: body.history, session }) };
   } catch (err) {
-    console.error("AI report failed, using demo engine:", err.message);
-    return { engine: "demo-fallback", report: demoReport(body) };
+    console.error("AI report failed:", err.message);
+    if (permanentFailure(err)) return { engine: "demo-fallback", report: demoReport(body) };
+    throw Object.assign(new Error("Claude did not answer. Try again."), { status: 503 });
   }
 }
 
@@ -136,6 +144,7 @@ export const server = http.createServer(async (req, res) => {
         engine: body.engine ?? "unknown",
         report: body.report,
         transcript: validHistory(body.history) ? body.history : [],
+        diagnostics: body.diagnostics ?? {},
         status: "new",
       });
       return send(res, 201, { reference });

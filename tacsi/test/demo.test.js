@@ -127,3 +127,43 @@ test("a near-miss answer from Claude is kept, not thrown away", async () => {
   assert.equal(turn.ready_for_referral, false);
   assert.throws(() => coerceTurn({ quick_replies: ["Yes"] }));
 });
+
+test("responds when the person changes topic, then comes back", () => {
+  const steps = ["I lost my job and I owe council tax", "I owe money", "Council tax", "How do I find a new job?"];
+  const history = [];
+  let demoState = null;
+  let r;
+  for (const text of steps) {
+    history.push({ role: "user", text });
+    r = demoTurn({ history, session: {}, demoState });
+    demoState = r.state;
+    history.push({ role: "assistant", text: r.result.reply });
+  }
+  assert.match(r.result.reply, /National Careers Service/);
+  assert.match(r.result.reply, /pay, losing your job/);
+  assert.match(r.result.reply, /come back to money and debt/);
+  assert.ok(demoState.questions.includes("How do I find a new job?"));
+  // After the work question, it returns to the unanswered money question.
+  history.push({ role: "user", text: "Losing my job" });
+  r = demoTurn({ history, session: {}, demoState });
+  assert.match(r.result.reply, /court letter|bailiffs/);
+});
+
+test("'what do I do now' offers to show where to get help", () => {
+  const { result } = converse(["My landlord wants me out", "What do I do now?"]);
+  assert.match(result.reply, /show you where to get help/);
+});
+
+test("explains each UK idea only once", () => {
+  const history = [];
+  let demoState = null;
+  let shown = 0;
+  for (const text of ["I owe council tax", "Council tax again, the council tax letter"]) {
+    history.push({ role: "user", text });
+    const r = demoTurn({ history, session: {}, demoState });
+    demoState = r.state;
+    shown += r.result.concepts.filter((c) => c.term === "Council tax").length;
+    history.push({ role: "assistant", text: r.result.reply });
+  }
+  assert.equal(shown, 1);
+});

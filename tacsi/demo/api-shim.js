@@ -54,8 +54,13 @@ async function turn(body) {
     if (keywordRisk.level === "immediate" && result.risk.level !== "immediate") result.risk = keywordRisk;
     return { engine: "ai", result, demoState: demo.state };
   } catch (e) {
-    console.warn("Claude turn failed, using demo engine:", e?.code ?? e?.message);
-    return { engine: "demo-fallback", result: demo.result, demoState: demo.state };
+    const code = e?.code ?? "bad_answer";
+    console.warn("Claude turn failed:", code, e?.message);
+    // Claude cannot be used at all in this view: carry on with the demo engine.
+    if (aiOff || !(await samplePromise)) return { engine: "demo-fallback", result: demo.result, demoState: demo.state, code };
+    // A one-off failure: let the person try again rather than switching the
+    // conversation to the demo engine half-way through.
+    return { engine: "ai-error", code };
   }
 }
 
@@ -64,8 +69,9 @@ async function report(body) {
     const content = `${SYSTEM_PROMPT}\n\n${reportRequest({ history: body.history, session: body.session ?? {} })}\n\n${formatNote(ReportSchema)}`;
     return { engine: "ai", report: await askClaude([{ role: "user", content }], coerceReport, "default") };
   } catch (e) {
-    console.warn("Claude report failed, using demo engine:", e?.code ?? e?.message);
-    return { engine: "demo-fallback", report: demoReport(body) };
+    console.warn("Claude report failed:", e?.code ?? e?.message);
+    if (aiOff || !(await samplePromise)) return { engine: "demo-fallback", report: demoReport(body) };
+    return null;
   }
 }
 
@@ -137,12 +143,15 @@ async function handle(method, path, body, pin) {
   if (method === "GET" && path === "/api/health") return json(200, { ok: true, mode: (await samplePromise) ? "ai" : "demo" });
   if (method === "GET" && path === "/api/knowledge") return json(200, { services: SERVICES, concepts: CONCEPTS });
   if (method === "POST" && path === "/api/turn") return json(200, await turn(body));
-  if (method === "POST" && path === "/api/report") return json(200, await report(body));
+  if (method === "POST" && path === "/api/report") {
+    const r = await report(body);
+    return r ? json(200, r) : json(503, { error: "Claude did not answer. Try again." });
+  }
   if (method === "POST" && path === "/api/cases") {
     if (!body.consent) return json(400, { error: "Consent is needed to share a case" });
     const reference = `TAC-${1000 + Math.floor(Math.random() * 9000)}`;
     await saveCase(
-      { reference, createdAt: new Date().toISOString(), session: body.session ?? {}, engine: body.engine ?? "unknown", report: body.report, transcript: body.history ?? [], status: "new" },
+      { reference, createdAt: new Date().toISOString(), session: body.session ?? {}, engine: body.engine ?? "unknown", report: body.report, transcript: body.history ?? [], diagnostics: body.diagnostics ?? {}, status: "new" },
     );
     return json(201, { reference });
   }

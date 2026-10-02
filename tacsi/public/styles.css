@@ -275,3 +275,12 @@ th { font-weight: 700; }
 @media (max-width: 640px) { .summary-list div { grid-template-columns: 1fr; } }
 .table-wrap { overflow-x: auto; margin-bottom: 30px; }
 .table-wrap table { margin-bottom: 0; min-width: 640px; }
+
+/* Advice shown once in the chat, then kept here */
+.urgent-line { display: flex; align-items: center; gap: 8px; margin: 0 0 15px; padding: 8px 12px; border-inline-start: 5px solid var(--red); background: #fdf2f0; font-weight: 700; }
+.urgent-line .icon { width: 24px; height: 24px; color: var(--red); flex-shrink: 0; }
+.urgent--inline { margin-top: 10px; margin-bottom: 0; }
+.advice { margin-bottom: 15px; }
+.advice__panel { border: 2px solid var(--border); padding: 15px 18px; margin-top: 6px; display: grid; gap: 12px; }
+.advice__panel .first-aid, .advice__panel .concept, .advice__panel .urgent { margin: 0; }
+.msg--note .msg__bubble { border-style: dashed; border-color: var(--secondary-text); background: var(--white); }

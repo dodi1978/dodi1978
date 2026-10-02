@@ -18,13 +18,13 @@ export const TurnSchema = z.object({
   quick_replies: z.array(z.string()).describe("0 to 4 short answers the person can tap, in their language."),
   concepts: z
     .array(z.object({ term: z.string(), explanation: z.string() }))
-    .describe("UK ideas used in the reply that the person may not know, explained simply in their language. Usually 0 or 1."),
+    .describe("UK ideas used in the reply that the person may not know and that you have not explained before, explained simply in their language. Usually 0 or 1."),
   topics: z.array(Topic).describe("All areas of need identified so far."),
   risk: z.object({
     level: oneOf(RISK_LEVELS),
     reason: z.string().describe("English. Why this level. Empty if none."),
   }),
-  first_aid: z.array(z.string()).describe("Urgent do's and don'ts to show now, in the person's language. Usually empty."),
+  first_aid: z.array(z.string()).describe("New urgent do's and don'ts to show now, in the person's language. Never repeat advice given earlier. Usually empty."),
   ready_for_referral: z.boolean().describe("True when you know enough to refer, or the person wants to finish."),
 });
 

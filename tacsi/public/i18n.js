@@ -31,6 +31,11 @@ export const MORE_LANGUAGES = [
 ];
 
 const en = {
+  adviceAgain: "See advice again",
+  adviceTitle: "Advice so far",
+  inDanger: "In danger now? Call 999.",
+  aiHiccup: "Sorry, I could not answer that just now. Tap \"Try again\", or send your message again.",
+  tryAgain: "Try again",
   tagline: "Help to find help",
   leave: "Leave this page",
   textSize: "Bigger text",
@@ -104,6 +109,11 @@ const en = {
 };
 
 const pl = {
+  adviceAgain: "Zobacz porady ponownie",
+  adviceTitle: "Dotychczasowe porady",
+  inDanger: "Grozi Ci niebezpieczeństwo? Dzwoń na 999.",
+  aiHiccup: "Przepraszamy, nie udało się teraz odpowiedzieć. Dotknij „Spróbuj ponownie” albo wyślij wiadomość jeszcze raz.",
+  tryAgain: "Spróbuj ponownie",
   tagline: "Pomoc w znalezieniu pomocy",
   leave: "Opuść tę stronę",
   textSize: "Większy tekst",
@@ -171,6 +181,11 @@ const pl = {
 };
 
 const ro = {
+  adviceAgain: "Vezi din nou sfaturile",
+  adviceTitle: "Sfaturile de până acum",
+  inDanger: "Ești în pericol acum? Sună la 999.",
+  aiHiccup: "Ne pare rău, nu am putut răspunde acum. Atinge „Încearcă din nou” sau trimite mesajul din nou.",
+  tryAgain: "Încearcă din nou",
   tagline: "Ajutor ca să găsești ajutor",
   leave: "Părăsește pagina",
   textSize: "Text mai mare",
@@ -238,6 +253,11 @@ const ro = {
 };
 
 const ur = {
+  adviceAgain: "مشورہ دوبارہ دیکھیں",
+  adviceTitle: "اب تک کے مشورے",
+  inDanger: "ابھی خطرے میں ہیں؟ 999 پر کال کریں۔",
+  aiHiccup: "معذرت، میں ابھی جواب نہیں دے سکا۔ \"دوبارہ کوشش کریں\" کو چھوئیں، یا اپنا پیغام دوبارہ بھیجیں۔",
+  tryAgain: "دوبارہ کوشش کریں",
   tagline: "مدد تلاش کرنے میں مدد",
   leave: "یہ صفحہ چھوڑیں",
   textSize: "بڑا متن",
@@ -305,6 +325,11 @@ const ur = {
 };
 
 const bn = {
+  adviceAgain: "পরামর্শ আবার দেখুন",
+  adviceTitle: "এ পর্যন্ত দেওয়া পরামর্শ",
+  inDanger: "এখন বিপদে আছেন? 999-এ ফোন করুন।",
+  aiHiccup: "দুঃখিত, এখনই উত্তর দিতে পারিনি। \"আবার চেষ্টা করুন\" ছুঁয়ে দিন, অথবা আপনার বার্তা আবার পাঠান।",
+  tryAgain: "আবার চেষ্টা করুন",
   tagline: "সাহায্য খুঁজে পেতে সাহায্য",
   leave: "এই পাতা ছেড়ে যান",
   textSize: "বড় লেখা",
@@ -372,6 +397,11 @@ const bn = {
 };
 
 const ar = {
+  adviceAgain: "اعرض النصائح مرة أخرى",
+  adviceTitle: "النصائح حتى الآن",
+  inDanger: "في خطر الآن؟ اتصل بالرقم 999.",
+  aiHiccup: "عذرًا، لم أستطع الرد الآن. المس \"حاول مرة أخرى\"، أو أرسل رسالتك مرة أخرى.",
+  tryAgain: "حاول مرة أخرى",
   tagline: "مساعدة للعثور على المساعدة",
   leave: "مغادرة هذه الصفحة",
   textSize: "نص أكبر",
@@ -439,6 +469,11 @@ const ar = {
 };
 
 const uk = {
+  adviceAgain: "Переглянути поради ще раз",
+  adviceTitle: "Поради на цей момент",
+  inDanger: "У небезпеці зараз? Телефонуйте 999.",
+  aiHiccup: "Вибачте, я не зміг відповісти зараз. Торкніться «Спробувати ще раз» або надішліть повідомлення ще раз.",
+  tryAgain: "Спробувати ще раз",
   tagline: "Допомога, щоб знайти допомогу",
   leave: "Покинути сторінку",
   textSize: "Більший текст",

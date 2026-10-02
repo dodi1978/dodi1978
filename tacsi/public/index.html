@@ -75,14 +75,12 @@
     <section class="screen" id="screen-chat" aria-labelledby="h-chat" hidden>
       <h1 class="heading-m" id="h-chat" tabindex="-1" data-i18n="chatTitle"></h1>
       <p class="notice" id="demo-notice" hidden data-i18n="demoNotice"></p>
-      <div class="urgent" id="urgent" hidden role="alert">
-        <span data-icon="warning" class="urgent__icon"></span>
-        <div>
-          <h2 class="heading-s" data-i18n="urgentTitle"></h2>
-          <p data-i18n="urgentText"></p>
-        </div>
-      </div>
+      <p class="urgent-line" id="urgent" hidden><span data-icon="warning"></span><span data-i18n="inDanger"></span></p>
       <ol class="chat" id="chat" aria-live="polite" aria-relevant="additions"></ol>
+      <div class="advice" id="advice" hidden>
+        <button type="button" class="link-button" id="advice-toggle" aria-expanded="false" aria-controls="advice-panel"><span data-icon="bulb"></span><span data-i18n="adviceAgain"></span></button>
+        <div class="advice__panel" id="advice-panel" hidden></div>
+      </div>
       <div class="quick" id="quick"></div>
       <form class="composer" id="composer">
         <label for="message" class="visually-hidden" data-i18n="typeHere"></label>
