@@ -84,7 +84,7 @@ test("urgent report includes 999 and is marked urgent", () => {
 });
 
 test("AI output is normalised to known values, erring on the safe side", async () => {
-  const { normaliseTurn, normaliseReport } = await import("../src/ai.js");
+  const { normaliseTurn, normaliseReport } = await import("../src/conversation.js");
   const turn = normaliseTurn({ topics: ["Money", "space travel"], risk: { level: "HIGH?", reason: "" }, quick_replies: ["a", "b", "c", "d", "e"] });
   assert.deepEqual(turn.topics, ["money"]);
   assert.equal(turn.risk.level, "concern");

@@ -237,6 +237,7 @@ async function sendMessage(text) {
     const data = await api("/api/turn", { history: state.history, session: session(), demoState: state.demoState });
     state.demoState = data.demoState;
     state.engine = data.engine;
+    if (data.engine !== "ai") $("demo-notice").hidden = false;
     const lastUser = state.history.findLast((m) => m.role === "user");
     if (lastUser) lastUser.english = data.result.user_message_english || text;
     addTacsi(data.result);
@@ -321,7 +322,7 @@ function renderResult() {
 
 function shareForm() {
   if (state.reference) {
-    return `<h2 class="heading-m">${esc(tr("referenceTitle"))}</h2><p class="reference">${esc(state.reference)}</p><p>${esc(tr("referenceText"))}</p>${STATIC ? `<p lang="en"><a href="staff.html" target="_blank" rel="noopener">See what the support worker gets (staff view, PIN 1234)</a></p>` : ""}`;
+    return `<h2 class="heading-m">${esc(tr("referenceTitle"))}</h2><p class="reference">${esc(state.reference)}</p><p>${esc(tr("referenceText"))}</p>${STATIC ? `<p lang="en"><a href="#staff">See what the support worker gets (staff view, PIN 1234)</a></p>` : ""}`;
   }
   return `<h2 class="heading-m">${esc(tr("shareTitle"))}</h2>
     <p>${esc(tr("shareText"))}</p>
@@ -407,16 +408,18 @@ function armIdle() {
 // ---------- Wire up ----------
 
 async function init() {
-  try {
-    const [health, k] = await Promise.all([fetch("/api/health").then((r) => r.json()), fetch("/api/knowledge").then((r) => r.json())]);
-    mode = health.mode;
-    knowledge = k;
-  } catch {
-    mode = "demo";
-  }
   renderLanguages();
   applyText();
   setupMic();
+  // Render first; which engine is running can take a moment to find out.
+  fetch("/api/knowledge")
+    .then((r) => r.json())
+    .then((k) => (knowledge = k))
+    .catch(() => {});
+  fetch("/api/health")
+    .then((r) => r.json())
+    .then((h) => (mode = h.mode))
+    .catch(() => (mode = "demo"));
 
   $("exit").addEventListener("click", leave);
   $("start").addEventListener("click", () => show("topics"));

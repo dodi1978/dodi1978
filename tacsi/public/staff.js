@@ -1,5 +1,10 @@
 const app = document.getElementById("app");
 const STATIC = Boolean(window.TACSI_STATIC);
+// In the shareable link version the staff view lives in the same page, under #staff.
+const PREFIX = STATIC ? "staff" : "";
+const caseLink = (ref) => `#${PREFIX ? `${PREFIX}-` : ""}${ref}`;
+const listLink = `#${PREFIX}`;
+const citizenLink = STATIC ? "#" : "./";
 let pin = sessionStorageGet("tacsi-pin");
 let services = [];
 
@@ -59,14 +64,14 @@ async function renderList() {
     <p class="hint">Newest first. Urgent cases need a same-day response.</p>
     ${
       cases.length
-        ? `<table><thead><tr><th>Reference</th><th>Priority</th><th>Summary</th><th>Language</th><th>Received</th><th>Status</th></tr></thead><tbody>
+        ? `<div class="table-wrap"><table><thead><tr><th>Reference</th><th>Priority</th><th>Summary</th><th>Language</th><th>Received</th><th>Status</th></tr></thead><tbody>
       ${cases
         .map(
-          (c) => `<tr><td><a href="#${esc(c.reference)}">${esc(c.reference)}</a></td><td>${priorityTag(c.priority)}</td><td>${esc(c.headline)}</td>
+          (c) => `<tr><td><a href="${esc(caseLink(c.reference))}">${esc(c.reference)}</a></td><td>${priorityTag(c.priority)}</td><td>${esc(c.headline)}</td>
           <td>${esc(c.language)}</td><td>${new Date(c.createdAt).toLocaleString("en-GB")}</td><td><span class="tag tag--status">${esc(c.status)}</span></td></tr>`,
         )
-        .join("")}</tbody></table>`
-        : `<p>No referrals yet. Complete a conversation on the <a href="./">citizen screen</a> and choose to send it to a support worker.</p>`
+        .join("")}</tbody></table></div>`
+        : `<p>No referrals yet. Complete a conversation on the <a href="${citizenLink}">citizen screen</a> and choose to send it to a support worker.</p>`
     }
     <button class="button button--secondary" id="refresh">Refresh</button>`;
   document.getElementById("refresh").addEventListener("click", route);
@@ -77,7 +82,7 @@ async function renderCase(ref) {
   const s = c.report.staff;
   const row = (k, v) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`;
   app.innerHTML = `
-    <p><a href="#">Back to all referrals</a></p>
+    <p><a href="${listLink}">Back to all referrals</a></p>
     <span class="meta">${esc(c.reference)} · received ${new Date(c.createdAt).toLocaleString("en-GB")} · ${esc(c.session.place ?? "")} · engine: ${esc(c.engine)}</span>
     <h1 class="heading-l">${esc(s.headline)}</h1>
     <p>${priorityTag(s.priority)} ${esc(s.priority_reason)}</p>
@@ -134,11 +139,12 @@ async function renderCase(ref) {
 async function route() {
   if (!pin) return renderLogin();
   try {
-    const ref = location.hash.slice(1);
+    if (STATIC && !location.hash.startsWith(`#${PREFIX}`)) return;
+    const ref = location.hash.slice(1 + (PREFIX ? PREFIX.length : 0)).replace(/^-/, "");
     await (ref ? renderCase(ref) : renderList());
     window.scrollTo(0, 0);
   } catch (err) {
-    if (err.message !== "unauthorised") app.innerHTML = `<p class="warning-text">${esc(err.message)}</p><p><a href="#">Back</a></p>`;
+    if (err.message !== "unauthorised") app.innerHTML = `<p class="warning-text">${esc(err.message)}</p><p><a href="${listLink}">Back</a></p>`;
   }
 }
 

@@ -30,7 +30,7 @@ ANTHROPIC_API_KEY=sk-ant-... npm start
 * Citizen screen: http://localhost:3000 (add `?place=Library` or similar)
 * Staff view: http://localhost:3000/staff. The PIN is `1234`. Change it with `TACSI_STAFF_PIN`.
 * Tests: `npm test`
-* Shareable demo: `npm run build:demo` builds a version that runs entirely in the browser (demo engine only, no microphone or printing) into `dist/demo/`, ready to publish as a single web page.
+* Shareable link version: `npm run build:demo` builds `dist/demo/index.html`, a single page for claude.ai (published with the `sample` and `db` capabilities). It talks to Claude through the viewer's own claude.ai account and keeps shared cases in the page's database; the staff view is at `#staff`. Without those it falls back to the offline demo engine and this browser's storage. There is no microphone or printing in this version.
 
 ### Two engines
 
