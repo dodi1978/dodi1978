@@ -30,6 +30,7 @@ const js = result.outputFiles[0].text.replace(/<\/script/gi, "<\\/script");
 const css = await readFile(path.join(root, "public", "styles.css"), "utf8");
 
 const STAFF_ROOT = `<div class="width-container main" id="staff-root" hidden>
+    <p><a href="#">← Back to the citizen screen</a></p>
     <p class="notice">Demo staff view. Cases sent from this link can be seen by everyone who can open it. Do not enter real personal information.</p>
     <div id="app"></div>
   </div>
