@@ -223,7 +223,6 @@ const sayButton = (text, label = tr("listen"), lang = "") =>
 
 function renderHelpPanel() {
   const a = state.advice;
-  const count = a.tips.length + a.concepts.length + a.starters.length + (a.urgent ? 1 : 0);
   const parts = [];
   if (a.urgent) {
     parts.push(`<div class="urgent">${icon("warning", "icon urgent__icon")}
@@ -257,8 +256,6 @@ function renderHelpPanel() {
         .join("")}</section>`);
   }
   $("help-body").innerHTML = parts.length ? parts.join("") : `<p class="hint">${esc(tr("helpEmpty"))}</p>`;
-  $("help-count").hidden = count === 0;
-  $("help-count").textContent = count;
   $("help").classList.toggle("has-new", Boolean(a.fresh?.size));
   bindSay($("help-body"));
 }
@@ -491,9 +488,7 @@ function reset() {
   $("quick").innerHTML = "";
   $("result").innerHTML = "";
   $("urgent").hidden = true;
-  $("help").classList.remove("is-open", "has-new");
-  $("help-toggle").setAttribute("aria-expanded", "false");
-  $("help-count").hidden = true;
+  $("help").classList.remove("has-new");
   $("message").value = "";
   $("mic-status").textContent = "";
   $("tool-lang").hidden = true;
@@ -576,11 +571,6 @@ async function init() {
     prefs.largeText = !prefs.largeText;
     document.documentElement.classList.toggle("large-text", prefs.largeText);
     e.currentTarget.setAttribute("aria-pressed", prefs.largeText);
-  });
-  $("help-toggle").addEventListener("click", () => {
-    const open = !$("help").classList.contains("is-open");
-    $("help").classList.toggle("is-open", open);
-    $("help-toggle").setAttribute("aria-expanded", String(open));
   });
   $("composer").addEventListener("submit", (e) => {
     e.preventDefault();

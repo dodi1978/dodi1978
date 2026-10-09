@@ -286,13 +286,6 @@ th { font-weight: 700; }
 .chat-main { min-width: 0; }
 .help-panel { border: 2px solid var(--brand); background: var(--white); }
 .help-panel__title { margin: 0; padding: 14px 16px; background: var(--brand); color: var(--white); }
-.help-panel__toggle {
-  font: inherit; font-weight: 700; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 10px 16px;
-  border: 0; background: var(--brand); color: var(--white); cursor: pointer; text-align: start;
-}
-.help-panel__toggle .icon { width: 26px; height: 26px; }
-.help-panel__count { margin-inline-start: auto; min-width: 28px; padding: 2px 8px; border-radius: 14px; background: var(--white); color: var(--brand); text-align: center; }
-.help-panel.has-new .help-panel__count { background: var(--focus); color: var(--text); }
 .help-panel__body { padding: 16px; display: grid; gap: 18px; }
 .help-panel__body > .hint { margin: 0; }
 .help-section > .heading-s { margin-bottom: 8px; }
@@ -309,13 +302,13 @@ th { font-weight: 700; }
 .starter__english { margin: 8px 0 0; font-size: 0.9em; }
 .new-tag { display: inline-block; padding: 0 6px; margin-inline-end: 4px; background: var(--focus); color: var(--text); font-size: 0.75em; letter-spacing: 0.03em; text-transform: uppercase; }
 
-@media (min-width: 900px) {
-  .chat-layout { grid-template-columns: minmax(0, 1fr) 360px; }
+/* TACSI runs on shared screens (kiosks, tablets, PCs) in community spaces:
+   the help panel is always open. Side by side on landscape and portrait
+   screens; stacked under the conversation only on very narrow screens. */
+@media (min-width: 740px) {
+  .chat-layout { grid-template-columns: minmax(0, 1fr) 300px; }
   .help-panel { position: sticky; top: 76px; max-height: calc(100vh - 96px); overflow-y: auto; }
-  .help-panel__toggle { display: none; }
 }
-@media (max-width: 899px) {
-  .help-panel { order: -1; }
-  .help-panel__title { display: none; }
-  .help-panel:not(.is-open) .help-panel__body { display: none; }
+@media (min-width: 1100px) {
+  .chat-layout { grid-template-columns: minmax(0, 1fr) 360px; }
 }
