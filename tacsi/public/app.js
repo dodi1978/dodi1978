@@ -322,9 +322,36 @@ function session() {
   };
 }
 
+// Access code for an online server: entered once per screen by staff, kept in this browser.
+const CODE_KEY = "tacsi-access-code";
+function getCode() {
+  try {
+    return localStorage.getItem(CODE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+function setCode(code) {
+  try {
+    if (code) localStorage.setItem(CODE_KEY, code);
+    else localStorage.removeItem(CODE_KEY);
+  } catch {}
+}
+
 async function api(path, body) {
-  const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-access-code": getCode() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const error = (await res.json().catch(() => ({}))).error || res.statusText;
+    if (error === "access_code") {
+      setCode("");
+      show("setup");
+    }
+    throw new Error(error);
+  }
   return res.json();
 }
 
@@ -549,8 +576,21 @@ async function init() {
     .catch(() => {});
   fetch("/api/health")
     .then((r) => r.json())
-    .then((h) => (mode = h.mode))
+    .then((h) => {
+      mode = h.mode;
+      if (h.needsCode && !getCode()) show("setup");
+    })
     .catch(() => (mode = "demo"));
+  $("setup-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    setCode($("setup-code").value.trim());
+    const res = await fetch("/api/check-code", { method: "POST", headers: { "x-access-code": getCode() } }).catch(() => null);
+    $("setup-error").hidden = Boolean(res?.ok);
+    if (res?.ok) {
+      $("setup-code").value = "";
+      show("language");
+    } else setCode("");
+  });
 
   $("exit").addEventListener("click", leave);
   $("start").addEventListener("click", () => show("topics"));

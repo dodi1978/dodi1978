@@ -15,6 +15,12 @@ This is the first prototype: the MVP for readiness level 3 to 5. It is for demos
 | Messy input → referral | TACSI takes whatever the person types or says and asks short questions to fill the gaps: danger, deadlines, other linked problems, and barriers. It does not ask for names or addresses. |
 | Referral + staff report | **Citizen:** "What you told us", things to do now, things not to do (first aid), referral cards (phone, website, *what to say*, *what to have ready*) and words to know, all in the person's language. **Staff:** after consent, an English report with priority (urgent / high / standard), triage type (global / service-level / first aid), presenting issues, key facts, deadlines, safeguarding flags, access needs, unknowns, recommended actions and the full bilingual transcript. |
 
+## Put it online
+
+See [DEPLOY.md](DEPLOY.md) for step-by-step instructions (Render, your own API key, an access code for your screens and a private staff PIN).
+
+Online settings: `ANTHROPIC_API_KEY`, `TACSI_ACCESS_CODE` (each screen enters it once), `TACSI_STAFF_PIN`, and optionally `TACSI_HOURLY_LIMIT` (Claude calls per network address per hour, default 120).
+
 ## Run it
 
 Needs Node 20 or later.

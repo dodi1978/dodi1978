@@ -51,3 +51,26 @@ test("turn, report and case sharing work end to end", async () => {
 test("rejects malformed history", async () => {
   assert.equal((await post("/api/turn", { history: [{ role: "system", text: "x" }] })).status, 400);
 });
+
+test("an access code and hourly limit protect the API key online", async () => {
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, ["server.js"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    env: { ...process.env, PORT: "3199", TACSI_ACCESS_CODE: "library-2026", TACSI_HOURLY_LIMIT: "2", ANTHROPIC_API_KEY: "" },
+  });
+  await new Promise((r) => child.stdout.once("data", r));
+  try {
+    const url = "http://localhost:3199";
+    assert.equal((await (await fetch(`${url}/api/health`)).json()).needsCode, true);
+    const body = JSON.stringify({ history: [{ role: "user", text: "help" }] });
+    const headers = { "content-type": "application/json" };
+    assert.equal((await fetch(`${url}/api/turn`, { method: "POST", headers, body })).status, 401);
+    const ok = { ...headers, "x-access-code": "library-2026" };
+    assert.equal((await fetch(`${url}/api/check-code`, { method: "POST", headers: ok })).status, 200);
+    assert.equal((await fetch(`${url}/api/turn`, { method: "POST", headers: ok, body })).status, 200);
+    assert.equal((await fetch(`${url}/api/turn`, { method: "POST", headers: ok, body })).status, 200);
+    assert.equal((await fetch(`${url}/api/turn`, { method: "POST", headers: ok, body })).status, 429);
+  } finally {
+    child.kill();
+  }
+});

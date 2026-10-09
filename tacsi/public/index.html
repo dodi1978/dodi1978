@@ -32,6 +32,18 @@
 
   <main id="main" class="width-container main" tabindex="-1">
 
+    <!-- 0. One-time set-up of a shared screen (only when the server has an access code) -->
+    <section class="screen" id="screen-setup" aria-labelledby="h-setup" hidden lang="en">
+      <h1 class="heading-l" id="h-setup" tabindex="-1">Set up this screen</h1>
+      <p>Enter the access code for TACSI. You only need to do this once on this device. Staff: keep the code private.</p>
+      <form id="setup-form" class="field">
+        <label for="setup-code">Access code</label>
+        <input id="setup-code" type="password" autocomplete="off">
+        <p class="warning-text" id="setup-error" hidden>That code is not right. Check it and try again.</p>
+        <button class="button" type="submit">Save</button>
+      </form>
+    </section>
+
     <!-- 1. Language -->
     <section class="screen" id="screen-language" aria-labelledby="h-language">
       <h1 class="heading-l" id="h-language">Choose your language</h1>

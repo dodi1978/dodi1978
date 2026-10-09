@@ -12,6 +12,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(here, "public");
 const PORT = Number(process.env.PORT || 3000);
 const STAFF_PIN = process.env.TACSI_STAFF_PIN || "1234";
+// Online, set an access code so only your screens can use (and spend) the API key.
+const ACCESS_CODE = process.env.TACSI_ACCESS_CODE || "";
+// Most Claude calls one network address may make per hour.
+const HOURLY_LIMIT = Number(process.env.TACSI_HOURLY_LIMIT || 120);
 const MAX_BODY = 256 * 1024;
 
 // Prototype only: cases live in memory and vanish on restart. Do not use real personal data.
@@ -117,11 +121,36 @@ async function serveStatic(req, res) {
   }
 }
 
+function accessAllowed(req) {
+  return !ACCESS_CODE || req.headers["x-access-code"] === ACCESS_CODE;
+}
+
+const usage = new Map();
+function underLimit(req) {
+  const ip = String(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "").split(",")[0].trim();
+  const hour = Math.floor(Date.now() / 3_600_000);
+  const entry = usage.get(ip);
+  if (!entry || entry.hour !== hour) {
+    if (usage.size > 10_000) usage.clear();
+    usage.set(ip, { hour, count: 1 });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= HOURLY_LIMIT;
+}
+
 export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   try {
     if (req.method === "GET" && url.pathname === "/api/health") {
-      return send(res, 200, { ok: true, mode: aiConfigured() ? "ai" : "demo" });
+      return send(res, 200, { ok: true, mode: aiConfigured() ? "ai" : "demo", needsCode: Boolean(ACCESS_CODE) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/check-code") {
+      return send(res, accessAllowed(req) ? 200 : 401, { ok: accessAllowed(req) });
+    }
+    if (req.method === "POST" && ["/api/turn", "/api/report", "/api/cases"].includes(url.pathname)) {
+      if (!accessAllowed(req)) return send(res, 401, { error: "access_code" });
+      if (url.pathname !== "/api/cases" && !underLimit(req)) return send(res, 429, { error: "Too many messages. Try again later." });
     }
     if (req.method === "GET" && url.pathname === "/api/knowledge") {
       return send(res, 200, { services: SERVICES, concepts: CONCEPTS });
