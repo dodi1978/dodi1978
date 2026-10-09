@@ -1,6 +1,6 @@
 # Putting TACSI online with your own Claude API key
 
-This guide puts TACSI on the internet at its own web address, for example `https://tacsi-prototype.onrender.com`. Screens in libraries, community centres or GP surgeries then open that address in a web browser.
+This guide puts the TACSI prototype on the internet at its own web address, for example `https://tacsi-prototype.onrender.com`, so that invited stakeholders (councils, charities, partners) can try it on their own computers. It is not for members of the public: only people who have the access code can use it.
 
 TACSI runs on a hosting service called **Render**, which keeps it running around the clock. You click through Render's website; there is no programming.
 
@@ -33,8 +33,8 @@ Never email the key, put it in a document or share it. Anyone who has it can spe
 
 Write these down somewhere private. You will type them into Render in Part 3.
 
-1. **Access code**: the code a member of staff types once on each screen, so only your screens can use TACSI. Use something not easy to guess, for example `library-blue-7341`.
-2. **Staff PIN**: the PIN for the staff view, where support workers read the reports. Use at least 6 digits, for example `582914`. Do not use `1234`.
+1. **Access code**: the code you give to the stakeholders you invite. Without it, nobody can use TACSI or spend your credit. Use something not easy to guess, for example `tacsi-blue-7341`.
+2. **Staff PIN**: the PIN for the staff view, where stakeholders can see the report a support worker would get. Use at least 6 digits, for example `582914`. Do not use `1234`.
 
 ---
 
@@ -81,7 +81,7 @@ Write these down somewhere private. You will type them into Render in Part 3.
 ## Part 4: Test it yourself
 
 1. Open your web address in **Chrome** or **Edge**.
-2. You see **Set up this screen**. Type your access code and click **Save**.
+2. You see **Try the TACSI prototype**. Type your access code and click **Save**.
 3. Choose a language and have a short conversation.
 4. To try the microphone: tap it and click **Allow** when the browser asks.
 5. At the end, send the case to a support worker.
@@ -89,26 +89,41 @@ Write these down somewhere private. You will type them into Render in Part 3.
 
 ---
 
-## Part 5: Set up a screen in a community space
+## Part 5: Invite stakeholders
 
-On each computer, tablet or touchscreen:
+Send each stakeholder an email like this. Replace the parts in [square brackets].
 
-1. Open your web address in Chrome or Edge.
-2. Type the access code and click **Save**. The screen remembers it, so you only do this once.
-3. Optional: add the place to the address, so staff reports show where the conversation happened. For example: `https://tacsi-prototype.onrender.com/?place=Sutton Library`.
-4. Press **F11** (on a Mac: Control + Command + F) to fill the whole screen.
+> **Subject:** Try the TACSI prototype
+>
+> Dear [name],
+>
+> Thank you for agreeing to try TACSI, a prototype triage tool that helps people explain a problem in their own language and finds them the right support.
+>
+> 1. Open this link in Chrome or Edge on a computer or tablet: [your web address]
+> 2. Enter the access code: [access code]
+> 3. Pretend to be someone looking for help, for example a parent whose child did not get a school place, or someone who cannot pay their council tax. You can type in any language, or use the microphone.
+> 4. At the end, choose to send your conversation to a support worker. Then open [your web address]/staff and enter the PIN [staff PIN] to see the report a support worker would get.
+>
+> Please use made-up situations only, not real personal information. The first time you open the link it may take up to a minute to start.
+>
+> I would be grateful for your thoughts on: [your questions, for example: Was it easy to use? Would the report help your staff? What is missing?]
+>
+> Best wishes,
+> [your name]
 
-TACSI clears itself after 3 minutes without use, so the next person does not see the previous conversation.
+Tips:
 
----
+- Everyone you invite sees every case sent in the staff view, so ask them to use made-up situations only.
+- If you want to stop someone using TACSI, change the access code (see "Changing a setting later") and send the new code to everyone else.
+- You can see how much the testing costs in the Anthropic console under **Usage**.
 
 ## Part 6: Things to know
 
-- **Free plan**: if nobody uses TACSI for 15 minutes, Render puts it to sleep. The next person then waits about a minute for it to wake up. For a real trial, choose the **Starter** plan (about $7 a month): open your service in Render, click **Settings**, then **Instance Type**.
-- **Cases are deleted** when TACSI restarts or goes to sleep. This prototype does not store data permanently, on purpose. Support workers should read and note cases on the same day.
+- **Free plan**: if nobody uses TACSI for 15 minutes, Render puts it to sleep. The next person then waits about a minute for it to wake up. This is usually fine for testing. If it gets in the way, for example during a workshop, choose the **Starter** plan (about $7 a month): open your service in Render, click **Settings**, then **Instance Type**. Tip: open the link yourself a few minutes before a workshop to wake it up.
+- **Cases are deleted** when TACSI restarts or goes to sleep. This prototype does not store data permanently, on purpose. Ask stakeholders to look at the staff view straight after their conversation.
 - **Cost**: each conversation uses your API credit, roughly 20 to 50 pence. You can see your spending in the Anthropic console under **Usage**.
-- **No real personal information**: this is a prototype. Use it with made-up situations, or in supervised sessions where people know not to share names or addresses.
-- **Data**: what people type is processed by Render (in Frankfurt) and by Anthropic. Check this with your partners' data protection lead before using it with the public.
+- **No real personal information**: this is a prototype for stakeholders to try with made-up situations. It is not ready for members of the public.
+- **Data**: what people type is processed by Render (in Frankfurt) and by Anthropic.
 - **Updates**: when TACSI's files change on GitHub, Render updates the website by itself within a few minutes.
 
 ---
@@ -119,7 +134,7 @@ TACSI clears itself after 3 minutes without use, so the next person does not see
 2. Click **Environment** on the left.
 3. Click **Edit**, change the value, and click **Save Changes**. TACSI restarts by itself.
 
-To change the access code, change `TACSI_ACCESS_CODE`. Every screen will then ask for the new code.
+To change the access code, change `TACSI_ACCESS_CODE`. Everyone will then be asked for the new code.
 
 To stop TACSI completely: open the service, click **Settings**, scroll to the bottom and click **Suspend Web Service** (or **Delete Web Service**).
 
@@ -133,5 +148,5 @@ To stop TACSI completely: open the service, click **Settings**, scroll to the bo
 | TACSI says **Demo mode** | The API key is missing or wrong. Check `ANTHROPIC_API_KEY` under **Environment**: no spaces before or after it. Make sure your Anthropic account has credit. |
 | **That code is not right** | The access code is typed exactly as in `TACSI_ACCESS_CODE`, including capitals. |
 | The page takes a minute to open | The free plan was asleep. Wait, or move to the Starter plan. |
-| **Too many messages** | One network has sent more than 120 messages in an hour. Wait for the next hour. To change the limit, add an environment variable `TACSI_HOURLY_LIMIT` with a higher number. |
+| **Too many messages** | One network (for example one office) has sent more than 120 messages in an hour. Wait for the next hour. To change the limit, add an environment variable `TACSI_HOURLY_LIMIT` with a higher number. |
 | Anything else | In Render, click **Logs** on the left. Copy the last red lines and send them to whoever helps you with TACSI. |

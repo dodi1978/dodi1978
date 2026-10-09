@@ -32,10 +32,11 @@
 
   <main id="main" class="width-container main" tabindex="-1">
 
-    <!-- 0. One-time set-up of a shared screen (only when the server has an access code) -->
+    <!-- 0. Access code, asked once per device (only when the server has one) -->
     <section class="screen" id="screen-setup" aria-labelledby="h-setup" hidden lang="en">
-      <h1 class="heading-l" id="h-setup" tabindex="-1">Set up this screen</h1>
-      <p>Enter the access code for TACSI. You only need to do this once on this device. Staff: keep the code private.</p>
+      <h1 class="heading-l" id="h-setup" tabindex="-1">Try the TACSI prototype</h1>
+      <p>Enter the access code you were given. You only need to do this once on this device.</p>
+      <p class="hint">This is a prototype for testing. Please use made-up situations, not real personal information.</p>
       <form id="setup-form" class="field">
         <label for="setup-code">Access code</label>
         <input id="setup-code" type="password" autocomplete="off">
