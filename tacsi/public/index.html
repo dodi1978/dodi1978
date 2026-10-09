@@ -76,20 +76,27 @@
       <h1 class="heading-m" id="h-chat" tabindex="-1" data-i18n="chatTitle"></h1>
       <p class="notice" id="demo-notice" hidden data-i18n="demoNotice"></p>
       <p class="urgent-line" id="urgent" hidden><span data-icon="warning"></span><span data-i18n="inDanger"></span></p>
-      <ol class="chat" id="chat" aria-live="polite" aria-relevant="additions"></ol>
-      <div class="advice" id="advice" hidden>
-        <button type="button" class="link-button" id="advice-toggle" aria-expanded="false" aria-controls="advice-panel"><span data-icon="bulb"></span><span data-i18n="adviceAgain"></span></button>
-        <div class="advice__panel" id="advice-panel" hidden></div>
+      <div class="chat-layout">
+        <div class="chat-main">
+          <ol class="chat" id="chat" aria-live="polite" aria-relevant="additions"></ol>
+          <div class="quick" id="quick"></div>
+          <form class="composer" id="composer">
+            <label for="message" class="visually-hidden" data-i18n="typeHere"></label>
+            <textarea id="message" rows="2" autocomplete="off"></textarea>
+            <button type="button" class="round-button" id="mic" hidden><span data-icon="mic"></span><span class="visually-hidden" data-i18n="speak"></span></button>
+            <button type="submit" class="round-button round-button--send" id="send"><span data-icon="send"></span><span class="visually-hidden" data-i18n="send"></span></button>
+          </form>
+          <p class="mic-status" id="mic-status" aria-live="assertive"></p>
+          <button type="button" class="button button--secondary button--wide" id="finish" data-i18n="finish"></button>
+        </div>
+        <aside class="help-panel" id="help" aria-labelledby="help-title">
+          <button type="button" class="help-panel__toggle" id="help-toggle" aria-expanded="false" aria-controls="help-body">
+            <span data-icon="bulb"></span><span data-i18n="helpTitle"></span><span class="help-panel__count" id="help-count" hidden></span>
+          </button>
+          <h2 class="heading-s help-panel__title" id="help-title" data-i18n="helpTitle"></h2>
+          <div class="help-panel__body" id="help-body"></div>
+        </aside>
       </div>
-      <div class="quick" id="quick"></div>
-      <form class="composer" id="composer">
-        <label for="message" class="visually-hidden" data-i18n="typeHere"></label>
-        <textarea id="message" rows="2" autocomplete="off"></textarea>
-        <button type="button" class="round-button" id="mic" hidden><span data-icon="mic"></span><span class="visually-hidden" data-i18n="speak"></span></button>
-        <button type="submit" class="round-button round-button--send" id="send"><span data-icon="send"></span><span class="visually-hidden" data-i18n="send"></span></button>
-      </form>
-      <p class="mic-status" id="mic-status" aria-live="assertive"></p>
-      <button type="button" class="button button--secondary button--wide" id="finish" data-i18n="finish"></button>
     </section>
 
     <!-- 5. Result -->

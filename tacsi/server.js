@@ -60,7 +60,7 @@ async function handleTurn(body) {
   const demo = demoTurn({ history: body.history, session, demoState: body.demoState });
   if (!useAI(body)) return { engine: "demo", result: demo.result, demoState: demo.state };
   try {
-    const result = await aiTurn({ history: body.history, session });
+    const result = await aiTurn({ history: body.history, session, shown: body.shown });
     // Never let the AI downgrade a risk that plain keyword matching found.
     const lastUser = [...body.history].reverse().find((m) => m.role === "user")?.text ?? "";
     const keywordRisk = detectRisk(lastUser);

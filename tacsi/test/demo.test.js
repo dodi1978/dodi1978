@@ -167,3 +167,33 @@ test("explains each UK idea only once", () => {
   }
   assert.equal(shown, 1);
 });
+
+test("offers a conversation starter for each service once", () => {
+  const history = [];
+  let demoState = null;
+  const starters = [];
+  for (const text of ["My husband hurts me", "Yes", "I don't know what to say"]) {
+    history.push({ role: "user", text });
+    const r = demoTurn({ history, session: {}, demoState });
+    demoState = r.state;
+    starters.push(...r.result.starters);
+    history.push({ role: "assistant", text: r.result.reply });
+  }
+  assert.equal(starters.filter((s) => s.service_id === "domestic-abuse-helpline").length, 1);
+  assert.match(history.at(-1).text, /help panel/);
+});
+
+test("Claude is told which questions it has already asked and what advice is showing", async () => {
+  const { toMessages } = await import("../src/conversation.js");
+  const history = [
+    { role: "assistant", text: "Hello. I am TACSI." },
+    { role: "user", text: "My husband hurts me" },
+    { role: "assistant", text: "I am sorry. Are you safe right now?" },
+    { role: "user", text: "Not sure" },
+  ];
+  const messages = toMessages(history, { language: "en", languageName: "English" }, { tips: ["Keep your phone charged."], urgent: true });
+  const last = messages.at(-1).content;
+  assert.match(last, /Questions you have already asked:\n- Are you safe right now\?/);
+  assert.match(last, /Keep your phone charged/);
+  assert.match(last, /danger box/);
+});

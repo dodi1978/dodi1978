@@ -26,7 +26,7 @@ const fresh = () => ({
   reference: null,
   busy: false,
   // Help boxes already shown in the chat; after that they live behind "See advice again".
-  advice: { urgent: false, tips: [], concepts: [] },
+  advice: { urgent: false, tips: [], concepts: [], starters: [], fresh: new Set() },
   aiErrors: [],
 });
 let state = fresh();
@@ -111,16 +111,16 @@ function voiceFor(lang) {
   return voices.find((v) => v.lang === lang) ?? voices.find((v) => v.lang.startsWith(base));
 }
 
-function speak(text) {
+function speak(text, speechLang = state.speech) {
   if (!("speechSynthesis" in window)) return false;
   speechSynthesis.cancel();
-  const voice = voiceFor(state.speech);
-  if (!voice && state.lang !== "en") {
+  const voice = voiceFor(speechLang);
+  if (!voice && !speechLang.startsWith("en")) {
     $("mic-status").textContent = tr("noVoice");
     return false;
   }
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = voice?.lang ?? state.speech;
+  u.lang = voice?.lang ?? speechLang;
   if (voice) u.voice = voice;
   u.rate = 0.9;
   speechSynthesis.speak(u);
@@ -164,55 +164,120 @@ function startChat() {
   $("message").focus();
 }
 
-// ---------- Help boxes: shown once, then kept behind "See advice again" ----------
+// ---------- Help panel: advice beside the conversation, each item once ----------
 
-const sameText = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+// Two pieces of advice count as the same when they share most of their words,
+// so "Call 999 if you are in danger" and "If you are in danger, call 999" show once.
+const words = (x) => new Set(x.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((w) => w.length > 2 || /\d/.test(w)));
+function similar(a, b) {
+  const A = words(a);
+  const B = words(b);
+  if (!A.size || !B.size) return a.trim().toLowerCase() === b.trim().toLowerCase();
+  const shared = [...A].filter((w) => B.has(w)).length;
+  return shared / Math.min(A.size, B.size) >= 0.7;
+}
+const termKey = (t) => t.toLowerCase().replace(/\(.*?\)/g, "").trim();
 
-const urgentHtml = (cls = "") => `<div class="urgent ${cls}" role="alert"><span class="urgent__icon">${icon("warning")}</span>
-  <div><h2 class="heading-s">${esc(tr("urgentTitle"))}</h2><p>${esc(tr("urgentText"))}</p></div></div>`;
-const tipsHtml = (tips) =>
-  tips.length ? `<div class="first-aid"><h2 class="heading-s">${esc(tr("doNow"))}</h2><ul>${tips.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : "";
-const conceptHtml = (c) => `<details class="concept"><summary>${icon(conceptIcon(c.term))}<span>${esc(tr("whatDoesThisMean"))} “${esc(c.term)}”</span></summary>
-  <div class="concept__body"><p>${esc(c.explanation)}</p><button type="button" class="link-button" data-say-text="${esc(`${c.term}. ${c.explanation}`)}">${icon("speaker")}${esc(tr("listen"))}</button></div></details>`;
-
-function bindSay(root) {
-  root.querySelectorAll("[data-say-text]").forEach((b) => b.addEventListener("click", () => speak(b.dataset.sayText)));
+function addAdvice(result) {
+  const a = state.advice;
+  a.fresh = new Set();
+  if (result.risk?.level === "immediate" && !a.urgent) {
+    a.urgent = true;
+    a.fresh.add("urgent");
+  }
+  for (const tip of result.first_aid ?? []) {
+    if (!tip?.trim()) continue;
+    if (/\b999\b/.test(tip) && (a.urgent || a.tips.some((x) => /\b999\b/.test(x)))) continue;
+    if (a.tips.some((x) => similar(x, tip))) continue;
+    a.tips.push(tip);
+    a.fresh.add(`tip:${tip}`);
+  }
+  for (const c of result.concepts ?? []) {
+    if (!c.term || a.concepts.some((x) => termKey(x.term) === termKey(c.term))) continue;
+    a.concepts.push(c);
+    a.fresh.add(`concept:${c.term}`);
+  }
+  for (const st of result.starters ?? []) {
+    if (!st.text || a.starters.some((x) => x.service_id === st.service_id)) continue;
+    a.starters.push(st);
+    a.fresh.add(`starter:${st.service_id}`);
+  }
+  return a.fresh.size;
 }
 
-function renderAdvicePanel() {
+// What the screen shows, sent with each turn so TACSI does not repeat it.
+function shownSummary() {
   const a = state.advice;
-  const count = a.tips.length + a.concepts.length + (a.urgent ? 1 : 0);
-  $("advice").hidden = count === 0;
-  $("advice-panel").innerHTML = `<h2 class="heading-s">${esc(tr("adviceTitle"))}</h2>${a.urgent ? urgentHtml() : ""}${tipsHtml(a.tips)}${a.concepts.map(conceptHtml).join("")}`;
-  bindSay($("advice-panel"));
+  return { tips: a.tips, concepts: a.concepts.map((c) => c.term), starters: a.starters.map((x) => x.service_id), urgent: a.urgent };
+}
+
+function bindSay(root) {
+  root.querySelectorAll("[data-say-text]").forEach((b) =>
+    b.addEventListener("click", () => speak(b.dataset.sayText, b.dataset.sayLang || undefined)),
+  );
+}
+
+const newTag = (key) => (state.advice.fresh?.has(key) ? `<strong class="new-tag">${esc(tr("newLabel"))}</strong> ` : "");
+const sayButton = (text, label = tr("listen"), lang = "") =>
+  `<button type="button" class="link-button" data-say-text="${esc(text)}" data-say-lang="${lang}">${icon("speaker")}${esc(label)}</button>`;
+
+function renderHelpPanel() {
+  const a = state.advice;
+  const count = a.tips.length + a.concepts.length + a.starters.length + (a.urgent ? 1 : 0);
+  const parts = [];
+  if (a.urgent) {
+    parts.push(`<div class="urgent">${icon("warning", "icon urgent__icon")}
+      <div>${newTag("urgent")}<h3 class="heading-s">${esc(tr("urgentTitle"))}</h3><p>${esc(tr("urgentText"))}</p></div></div>`);
+  }
+  if (a.starters.length) {
+    parts.push(`<section class="help-section"><h3 class="heading-s">${esc(tr("sayTitle"))}</h3><p class="hint">${esc(tr("sayHint"))}</p>
+      ${a.starters
+        .map((st) => {
+          const s = serviceById(st.service_id);
+          const english = st.text_english && st.text_english.trim() !== st.text.trim() ? st.text_english : "";
+          return `<div class="starter">${newTag(`starter:${st.service_id}`)}
+            <p class="starter__service">${esc(s?.name ?? st.service_id)}${s?.phone ? ` · <span class="starter__phone">${esc(s.phone)}</span>` : ""}</p>
+            <p class="say">“${esc(st.text)}”</p>${sayButton(st.text)}
+            ${english ? `<p class="starter__english" lang="en"><span class="meta">${esc(tr("inEnglish"))}:</span> “${esc(english)}”</p>${sayButton(english, `${tr("listen")} (${tr("inEnglish")})`, "en-GB")}` : ""}
+          </div>`;
+        })
+        .join("")}</section>`);
+  }
+  if (a.tips.length) {
+    parts.push(`<section class="help-section first-aid"><h3 class="heading-s">${esc(tr("doNow"))}</h3>
+      <ul>${a.tips.map((x) => `<li>${newTag(`tip:${x}`)}${esc(x)}</li>`).join("")}</ul></section>`);
+  }
+  if (a.concepts.length) {
+    parts.push(`<section class="help-section"><h3 class="heading-s">${esc(tr("wordsTitle"))}</h3>
+      ${a.concepts
+        .map(
+          (c) => `<details class="concept"><summary>${icon(conceptIcon(c.term))}<span>${newTag(`concept:${c.term}`)}${esc(c.term)}</span></summary>
+          <div class="concept__body"><p>${esc(c.explanation)}</p>${sayButton(`${c.term}. ${c.explanation}`)}</div></details>`,
+        )
+        .join("")}</section>`);
+  }
+  $("help-body").innerHTML = parts.length ? parts.join("") : `<p class="hint">${esc(tr("helpEmpty"))}</p>`;
+  $("help-count").hidden = count === 0;
+  $("help-count").textContent = count;
+  $("help").classList.toggle("has-new", Boolean(a.fresh?.size));
+  bindSay($("help-body"));
 }
 
 function addTacsi(result) {
   state.history.push({ role: "assistant", text: result.reply, english: result.reply_english });
-  const a = state.advice;
-  const newTips = (result.first_aid ?? []).filter((x) => x && !a.tips.some((y) => sameText(x, y)));
-  const newConcepts = (result.concepts ?? []).filter((c) => c.term && !a.concepts.some((y) => sameText(c.term, y.term)));
-  const showUrgent = result.risk?.level === "immediate" && !a.urgent;
-  a.tips.push(...newTips);
-  a.concepts.push(...newConcepts);
-  if (showUrgent) a.urgent = true;
-
   const li = document.createElement("li");
   li.className = "msg msg--tacsi";
   li.innerHTML = `
     <div class="msg__who">TACSI</div>
     <div class="msg__bubble">${esc(result.reply)}</div>
-    <div class="msg__actions"><button type="button" class="link-button" data-say>${icon("speaker")}${esc(tr("listen"))}</button></div>
-    ${showUrgent ? urgentHtml("urgent--inline") : ""}
-    ${tipsHtml(newTips)}
-    ${newConcepts.map(conceptHtml).join("")}`;
+    <div class="msg__actions"><button type="button" class="link-button" data-say>${icon("speaker")}${esc(tr("listen"))}</button></div>`;
   li.querySelector("[data-say]").addEventListener("click", () => speak(result.reply));
-  bindSay(li);
   $("chat").append(li);
   renderQuick(result.quick_replies ?? []);
-  // After the first warning, a short line stays at the top instead of the full box.
-  if (a.urgent) $("urgent").hidden = false;
-  renderAdvicePanel();
+  addAdvice(result);
+  // A short line stays above the chat once there is danger; the full box is in the panel.
+  if (state.advice.urgent) $("urgent").hidden = false;
+  renderHelpPanel();
   if (prefs.readAloud) speak(result.reply);
   li.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -291,7 +356,7 @@ async function requestTurn() {
   const text = state.history.at(-1)?.text ?? "";
   setBusy(true);
   try {
-    const data = await api("/api/turn", { history: state.history, session: session(), demoState: state.demoState });
+    const data = await api("/api/turn", { history: state.history, session: session(), demoState: state.demoState, shown: shownSummary() });
     if (data.engine === "ai-error") {
       state.aiErrors.push(data.code ?? "unknown");
       addRetryNote();
@@ -426,9 +491,9 @@ function reset() {
   $("quick").innerHTML = "";
   $("result").innerHTML = "";
   $("urgent").hidden = true;
-  $("advice").hidden = true;
-  $("advice-panel").hidden = true;
-  $("advice-toggle").setAttribute("aria-expanded", "false");
+  $("help").classList.remove("is-open", "has-new");
+  $("help-toggle").setAttribute("aria-expanded", "false");
+  $("help-count").hidden = true;
   $("message").value = "";
   $("mic-status").textContent = "";
   $("tool-lang").hidden = true;
@@ -512,11 +577,10 @@ async function init() {
     document.documentElement.classList.toggle("large-text", prefs.largeText);
     e.currentTarget.setAttribute("aria-pressed", prefs.largeText);
   });
-  $("advice-toggle").addEventListener("click", () => {
-    const open = $("advice-panel").hidden;
-    $("advice-panel").hidden = !open;
-    $("advice-toggle").setAttribute("aria-expanded", String(open));
-    if (open) renderAdvicePanel();
+  $("help-toggle").addEventListener("click", () => {
+    const open = !$("help").classList.contains("is-open");
+    $("help").classList.toggle("is-open", open);
+    $("help-toggle").setAttribute("aria-expanded", String(open));
   });
   $("composer").addEventListener("submit", (e) => {
     e.preventDefault();

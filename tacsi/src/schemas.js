@@ -25,6 +25,9 @@ export const TurnSchema = z.object({
     reason: z.string().describe("English. Why this level. Empty if none."),
   }),
   first_aid: z.array(z.string()).describe("New urgent do's and don'ts to show now, in the person's language. Never repeat advice given earlier. Usually empty."),
+  starters: z
+    .array(z.object({ service_id: z.string(), text: z.string(), text_english: z.string() }))
+    .describe("New conversation starters for services you suggested in this reply: what the person could say when they call. Service id from the directory. Usually empty."),
   ready_for_referral: z.boolean().describe("True when you know enough to refer, or the person wants to finish."),
 });
 

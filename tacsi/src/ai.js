@@ -39,8 +39,8 @@ async function call(messages, schema, effort, maxTokens) {
   return response.parsed_output;
 }
 
-export async function aiTurn({ history, session }) {
-  const messages = toMessages(history, session);
+export async function aiTurn({ history, session, shown }) {
+  const messages = toMessages(history, session, shown);
   if (!messages.length || messages.at(-1).role !== "user") {
     throw new Error("The last message must come from the person");
   }

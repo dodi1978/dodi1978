@@ -45,7 +45,7 @@ async function turn(body) {
   const session = body.session ?? {};
   const demo = demoTurn({ history: body.history, session, demoState: body.demoState });
   try {
-    const messages = toMessages(body.history, session);
+    const messages = toMessages(body.history, session, body.shown);
     const instructions = `${SYSTEM_PROMPT}\n\n${formatNote(TurnSchema)}`;
     // "quick" keeps the conversation responsive; the report uses the default tier.
     const result = await askClaude([{ role: "user", content: instructions }, ...messages], coerceTurn, "quick");

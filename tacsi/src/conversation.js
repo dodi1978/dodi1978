@@ -7,7 +7,28 @@ import { SERVICES, TOPICS } from "./knowledge/services.js";
 
 // history: [{ role: "user" | "assistant", text }]. Leading assistant turns
 // (the on-screen greeting) are dropped because the API needs a user turn first.
-export function toMessages(history, session) {
+// What the screen tells Claude each turn, so it does not repeat itself:
+// the questions it has asked and what is already in the side panel.
+export function screenNote(history, shown = {}) {
+  const asked = history
+    .filter((m) => m.role === "assistant")
+    .slice(1)
+    .flatMap((m) => m.text.match(/[^.!?]*\?/g) ?? [])
+    .map((q) => q.trim())
+    .filter(Boolean);
+  const lines = ["(From the screen, not typed by the person.)"];
+  lines.push(asked.length ? `Questions you have already asked:\n${asked.map((q) => `- ${q}`).join("\n")}` : "You have not asked any questions yet.");
+  const tips = shown.tips ?? [];
+  const concepts = shown.concepts ?? [];
+  const starters = shown.starters ?? [];
+  if (tips.length) lines.push(`Advice already in the side panel (do not give it again):\n${tips.map((x) => `- ${x}`).join("\n")}`);
+  if (concepts.length) lines.push(`Ideas already explained: ${concepts.join(", ")}`);
+  if (starters.length) lines.push(`Conversation starters already given for: ${starters.join(", ")}`);
+  if (shown.urgent) lines.push("The danger box (call 999, press 55, Samaritans 116 123) is already showing.");
+  return lines.join("\n\n");
+}
+
+export function toMessages(history, session, shown) {
   const firstUser = history.findIndex((m) => m.role === "user");
   const turns = firstUser === -1 ? [] : history.slice(firstUser);
   const messages = [];
@@ -20,6 +41,7 @@ export function toMessages(history, session) {
     }
   }
   if (messages.length) messages[0].content = `${sessionContext(session)}\n\nThe person says:\n${messages[0].content}`;
+  if (messages.length && messages.at(-1).role === "user") messages.at(-1).content += `\n\n${screenNote(history, shown)}`;
   return messages;
 }
 
@@ -38,6 +60,8 @@ export function normaliseTurn(turn) {
   turn.topics = [...new Set(turn.topics.map(clean).filter((x) => TOPICS.includes(x)))];
   turn.risk.level = pick(turn.risk.level, RISK_LEVELS, "concern");
   turn.quick_replies = turn.quick_replies.slice(0, 4);
+  const known = new Set(SERVICES.map((x) => x.id));
+  turn.starters = (turn.starters ?? []).filter((x) => known.has(x.service_id) && x.text);
   return turn;
 }
 
@@ -73,6 +97,7 @@ export function coerceTurn(raw) {
     topics: strs(t.topics),
     risk: { level: str(obj(t.risk).level), reason: str(obj(t.risk).reason) },
     first_aid: strs(t.first_aid),
+    starters: (Array.isArray(t.starters) ? t.starters : []).map(obj).map((x) => ({ service_id: str(x.service_id), text: str(x.text), text_english: str(x.text_english) })),
     ready_for_referral: t.ready_for_referral === true,
   });
 }

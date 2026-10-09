@@ -153,6 +153,22 @@ function owesMoney(state) {
   return /owe|debt/i.test(kind) || includesAny(allUserText(state), ["owe", "debt", "bailiff", "arrears", "council tax", "loan"]);
 }
 
+// One conversation starter per topic: what to say when calling the main service.
+function newStarters(state) {
+  state.startersGiven ??= [];
+  const out = [];
+  for (const t of state.topics) {
+    const service = servicesForTopics([t])
+      .filter((x) => x.kind === "national" && x.phone)
+      .sort((a, b) => a.topics.length - b.topics.length)[0];
+    if (!service || state.startersGiven.includes(service.id)) continue;
+    state.startersGiven.push(service.id);
+    const text = `Hello. I need help with ${TOPIC_LABELS[t].toLowerCase()}. I do not know where to start. Can you help me, please?`;
+    out.push({ service_id: service.id, text, text_english: text });
+  }
+  return out;
+}
+
 function isQuestion(text) {
   return /\?\s*$/.test(text.trim()) || /^(how|what|where|who|why|when|can i|can you|could|should i|do i|is there)\b/i.test(text.trim());
 }
@@ -184,6 +200,7 @@ function turn(state, reply, extra = {}) {
       topics: state.topics.length ? state.topics : ["other"],
       risk: state.risk,
       first_aid: extra.first_aid ?? [],
+      starters: newStarters(state),
       ready_for_referral: extra.ready ?? false,
     },
     state,
@@ -286,6 +303,14 @@ export function demoTurn({ history, session, demoState }) {
     return turn(state, "Thank you for telling me. What is this mostly about?", {
       quick_replies: ["Home and housing", "Money and debt", "Feeling unsafe", "School and children", "Visas and immigration", "Health and feelings"],
       concepts,
+      userEnglish: text,
+    });
+  }
+
+  if (/(don't|do not|dont) know what to say/i.test(text)) {
+    return turn(state, "That is OK. Many people feel like this. In the help panel there are sentences you can read out or show when you call. You do not have to explain everything.", {
+      concepts,
+      first_aid: firstAid,
       userEnglish: text,
     });
   }

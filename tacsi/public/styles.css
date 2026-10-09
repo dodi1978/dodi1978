@@ -276,11 +276,46 @@ th { font-weight: 700; }
 .table-wrap { overflow-x: auto; margin-bottom: 30px; }
 .table-wrap table { margin-bottom: 0; min-width: 640px; }
 
-/* Advice shown once in the chat, then kept here */
+.msg--note .msg__bubble { border-style: dashed; border-color: var(--secondary-text); background: var(--white); }
+
+/* Conversation with a help panel beside it */
 .urgent-line { display: flex; align-items: center; gap: 8px; margin: 0 0 15px; padding: 8px 12px; border-inline-start: 5px solid var(--red); background: #fdf2f0; font-weight: 700; }
 .urgent-line .icon { width: 24px; height: 24px; color: var(--red); flex-shrink: 0; }
-.urgent--inline { margin-top: 10px; margin-bottom: 0; }
-.advice { margin-bottom: 15px; }
-.advice__panel { border: 2px solid var(--border); padding: 15px 18px; margin-top: 6px; display: grid; gap: 12px; }
-.advice__panel .first-aid, .advice__panel .concept, .advice__panel .urgent { margin: 0; }
-.msg--note .msg__bubble { border-style: dashed; border-color: var(--secondary-text); background: var(--white); }
+.main:has(#screen-chat:not([hidden])) { max-width: 1240px; }
+.chat-layout { display: grid; gap: 24px; align-items: start; }
+.chat-main { min-width: 0; }
+.help-panel { border: 2px solid var(--brand); background: var(--white); }
+.help-panel__title { margin: 0; padding: 14px 16px; background: var(--brand); color: var(--white); }
+.help-panel__toggle {
+  font: inherit; font-weight: 700; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 10px 16px;
+  border: 0; background: var(--brand); color: var(--white); cursor: pointer; text-align: start;
+}
+.help-panel__toggle .icon { width: 26px; height: 26px; }
+.help-panel__count { margin-inline-start: auto; min-width: 28px; padding: 2px 8px; border-radius: 14px; background: var(--white); color: var(--brand); text-align: center; }
+.help-panel.has-new .help-panel__count { background: var(--focus); color: var(--text); }
+.help-panel__body { padding: 16px; display: grid; gap: 18px; }
+.help-panel__body > .hint { margin: 0; }
+.help-section > .heading-s { margin-bottom: 8px; }
+.help-section .hint { font-size: 0.85em; margin-bottom: 10px; }
+.help-panel .urgent { margin: 0; padding: 12px 14px; border-width: 4px; }
+.help-panel .urgent__icon { width: 36px; height: 36px; color: var(--red); flex-shrink: 0; }
+.help-panel .first-aid { margin: 0; }
+.help-panel .concept { margin-top: 8px; }
+.starter { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
+.starter:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+.starter__service { font-weight: 700; margin: 0 0 6px; }
+.starter__phone { white-space: nowrap; }
+.starter .say { margin: 6px 0 2px; }
+.starter__english { margin: 8px 0 0; font-size: 0.9em; }
+.new-tag { display: inline-block; padding: 0 6px; margin-inline-end: 4px; background: var(--focus); color: var(--text); font-size: 0.75em; letter-spacing: 0.03em; text-transform: uppercase; }
+
+@media (min-width: 900px) {
+  .chat-layout { grid-template-columns: minmax(0, 1fr) 360px; }
+  .help-panel { position: sticky; top: 76px; max-height: calc(100vh - 96px); overflow-y: auto; }
+  .help-panel__toggle { display: none; }
+}
+@media (max-width: 899px) {
+  .help-panel { order: -1; }
+  .help-panel__title { display: none; }
+  .help-panel:not(.is-open) .help-panel__body { display: none; }
+}

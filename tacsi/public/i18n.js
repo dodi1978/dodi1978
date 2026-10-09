@@ -31,6 +31,13 @@ export const MORE_LANGUAGES = [
 ];
 
 const en = {
+  helpTitle: "Help and advice",
+  helpEmpty: "Advice, explanations and things you could say will appear here as we talk.",
+  sayTitle: "What you could say",
+  sayHint: "Read this out or show it when you call.",
+  inEnglish: "In English",
+  newLabel: "New",
+  wordsTitle: "Words explained",
   adviceAgain: "See advice again",
   adviceTitle: "Advice so far",
   inDanger: "In danger now? Call 999.",
@@ -109,6 +116,13 @@ const en = {
 };
 
 const pl = {
+  helpTitle: "Pomoc i porady",
+  helpEmpty: "Porady, wyjaśnienia i zdania, które możesz powiedzieć, pojawią się tutaj podczas rozmowy.",
+  sayTitle: "Co możesz powiedzieć",
+  sayHint: "Przeczytaj to na głos lub pokaż, gdy zadzwonisz.",
+  inEnglish: "Po angielsku",
+  newLabel: "Nowe",
+  wordsTitle: "Wyjaśnione słowa",
   adviceAgain: "Zobacz porady ponownie",
   adviceTitle: "Dotychczasowe porady",
   inDanger: "Grozi Ci niebezpieczeństwo? Dzwoń na 999.",
@@ -181,6 +195,13 @@ const pl = {
 };
 
 const ro = {
+  helpTitle: "Ajutor și sfaturi",
+  helpEmpty: "Sfaturile, explicațiile și ce ai putea spune vor apărea aici pe măsură ce vorbim.",
+  sayTitle: "Ce ai putea spune",
+  sayHint: "Citește cu voce tare sau arată acest text când suni.",
+  inEnglish: "În engleză",
+  newLabel: "Nou",
+  wordsTitle: "Cuvinte explicate",
   adviceAgain: "Vezi din nou sfaturile",
   adviceTitle: "Sfaturile de până acum",
   inDanger: "Ești în pericol acum? Sună la 999.",
@@ -253,6 +274,13 @@ const ro = {
 };
 
 const ur = {
+  helpTitle: "مدد اور مشورہ",
+  helpEmpty: "بات چیت کے دوران مشورے، وضاحتیں اور وہ باتیں جو آپ کہہ سکتے ہیں یہاں نظر آئیں گی۔",
+  sayTitle: "آپ کیا کہہ سکتے ہیں",
+  sayHint: "کال کرتے وقت یہ پڑھ کر سنائیں یا دکھائیں۔",
+  inEnglish: "انگریزی میں",
+  newLabel: "نیا",
+  wordsTitle: "الفاظ کی وضاحت",
   adviceAgain: "مشورہ دوبارہ دیکھیں",
   adviceTitle: "اب تک کے مشورے",
   inDanger: "ابھی خطرے میں ہیں؟ 999 پر کال کریں۔",
@@ -325,6 +353,13 @@ const ur = {
 };
 
 const bn = {
+  helpTitle: "সাহায্য ও পরামর্শ",
+  helpEmpty: "আমরা কথা বলার সময় পরামর্শ, ব্যাখ্যা এবং আপনি কী বলতে পারেন তা এখানে দেখা যাবে।",
+  sayTitle: "আপনি কী বলতে পারেন",
+  sayHint: "ফোন করার সময় এটি পড়ে শোনান বা দেখান।",
+  inEnglish: "ইংরেজিতে",
+  newLabel: "নতুন",
+  wordsTitle: "শব্দের ব্যাখ্যা",
   adviceAgain: "পরামর্শ আবার দেখুন",
   adviceTitle: "এ পর্যন্ত দেওয়া পরামর্শ",
   inDanger: "এখন বিপদে আছেন? 999-এ ফোন করুন।",
@@ -397,6 +432,13 @@ const bn = {
 };
 
 const ar = {
+  helpTitle: "مساعدة ونصائح",
+  helpEmpty: "ستظهر هنا النصائح والشروح وما يمكنك قوله أثناء حديثنا.",
+  sayTitle: "ما يمكنك قوله",
+  sayHint: "اقرأ هذا بصوت عالٍ أو اعرضه عندما تتصل.",
+  inEnglish: "بالإنجليزية",
+  newLabel: "جديد",
+  wordsTitle: "كلمات مشروحة",
   adviceAgain: "اعرض النصائح مرة أخرى",
   adviceTitle: "النصائح حتى الآن",
   inDanger: "في خطر الآن؟ اتصل بالرقم 999.",
@@ -469,6 +511,13 @@ const ar = {
 };
 
 const uk = {
+  helpTitle: "Допомога і поради",
+  helpEmpty: "Поради, пояснення і те, що ви можете сказати, з'являтимуться тут під час розмови.",
+  sayTitle: "Що ви можете сказати",
+  sayHint: "Прочитайте це вголос або покажіть, коли зателефонуєте.",
+  inEnglish: "Англійською",
+  newLabel: "Нове",
+  wordsTitle: "Пояснені слова",
   adviceAgain: "Переглянути поради ще раз",
   adviceTitle: "Поради на цей момент",
   inDanger: "У небезпеці зараз? Телефонуйте 999.",
