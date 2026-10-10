@@ -55,7 +55,7 @@ Write these down somewhere private. You will type them into Render in Part 3.
    |---|---|
    | **Name** | `tacsi-prototype` (this becomes part of the web address) |
    | **Language** (or **Runtime**) | `Node` |
-   | **Branch** | `claude/keen-mendel-w9hzf6` |
+   | **Branch** | `main` |
    | **Region** | `Frankfurt (EU Central)` (the closest to the UK) |
    | **Root Directory** | `tacsi` |
    | **Build Command** | `npm install` |
@@ -124,7 +124,7 @@ Tips:
 - **Cost**: each conversation uses your API credit, roughly 20 to 50 pence. You can see your spending in the Anthropic console under **Usage**.
 - **No real personal information**: this is a prototype for stakeholders to try with made-up situations. It is not ready for members of the public.
 - **Data**: what people type is processed by Render (in Frankfurt) and by Anthropic.
-- **Updates**: when TACSI's files change on GitHub, Render updates the website by itself within a few minutes.
+- **Updates**: when changes to TACSI are merged into the `main` branch on GitHub, Render updates the website by itself within a few minutes. Each update restarts TACSI, so cases in the staff view are deleted. When you ask Claude Code for changes in a new session, say: "When you are done, merge the changes into main."
 
 ---
 
@@ -144,7 +144,7 @@ To stop TACSI completely: open the service, click **Settings**, scroll to the bo
 
 | What you see | What to do |
 |---|---|
-| Render says **Build failed** | Check that **Root Directory** is `tacsi` and **Branch** is `claude/keen-mendel-w9hzf6` (Settings page). Then click **Manual Deploy**, then **Deploy latest commit**. |
+| Render says **Build failed** | Check that **Root Directory** is `tacsi` and **Branch** is `main` (Settings page). Then click **Manual Deploy**, then **Deploy latest commit**. |
 | TACSI says **Demo mode** | The API key is missing or wrong. Check `ANTHROPIC_API_KEY` under **Environment**: no spaces before or after it. Make sure your Anthropic account has credit. |
 | **That code is not right** | The access code is typed exactly as in `TACSI_ACCESS_CODE`, including capitals. |
 | The page takes a minute to open | The free plan was asleep. Wait, or move to the Starter plan. |
