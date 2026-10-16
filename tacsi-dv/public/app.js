@@ -1,8 +1,9 @@
 import { LANGUAGES, MORE_LANGUAGES, t, hasUi, findLanguage } from "./i18n.js";
 import { icon, TOPIC_ICONS } from "./icons.js";
 
-// "Worries at home" comes last: most people start with a practical problem.
-const TOPICS = ["housing", "money", "family", "law", "immigration", "health", "benefits", "safety"];
+// TACSI DV has one entry point for everyone: no topic pictures before the
+// conversation, so nobody has to choose a category (or "Worries at home")
+// before they are ready. The conversation finds the topics.
 const IDLE_MS = 3 * 60 * 1000;
 const IDLE_COUNTDOWN = 60;
 // Set by the static demo build, where microphone and printing are not available.
@@ -80,28 +81,7 @@ function show(name) {
   heading?.setAttribute("tabindex", "-1");
   heading?.focus();
   window.scrollTo(0, 0);
-  if (name === "topics") renderTopics();
   if (name === "chat" && !state.history.length) startChat();
-}
-
-// ---------- Topics ----------
-
-function renderTopics() {
-  $("topic-grid").innerHTML = [...TOPICS, "other"]
-    .map((topic) => {
-      const label = topic === "other" ? tr("notSure") : tr(`topic_${topic}`);
-      return `<button type="button" class="topic" data-topic="${topic}" aria-pressed="${state.topics.includes(topic)}">
-        ${icon(TOPIC_ICONS[topic])}<span class="topic__label">${esc(label)}</span></button>`;
-    })
-    .join("");
-  document.querySelectorAll(".topic").forEach((b) =>
-    b.addEventListener("click", () => {
-      const topic = b.dataset.topic;
-      state.topics = state.topics.includes(topic) ? state.topics.filter((x) => x !== topic) : [...state.topics, topic];
-      b.setAttribute("aria-pressed", state.topics.includes(topic));
-      if (prefs.readAloud) speak(b.textContent.trim());
-    }),
-  );
 }
 
 // ---------- Speech ----------
@@ -594,12 +574,7 @@ async function init() {
   });
 
   $("exit").addEventListener("click", leave);
-  $("start").addEventListener("click", () => show("topics"));
-  $("topics-continue").addEventListener("click", () => show("chat"));
-  $("topics-skip").addEventListener("click", () => {
-    state.topics = [];
-    show("chat");
-  });
+  $("start").addEventListener("click", () => show("chat"));
   $("tool-lang").addEventListener("click", () => {
     reset();
   });

@@ -39,7 +39,7 @@ ANTHROPIC_API_KEY=sk-ant-... npm start   # with Claude
 | `src/knowledge/concepts.js` | Plain explanations of controlling behaviour, economic abuse, non-molestation and occupation orders, child arrangements, Clare's Law, refuges, council housing duties, legal aid, visas and abuse, Universal Credit, IDVA and MARAC, safeguarding. |
 | `src/demo.js` | Offline engine that spots indirect signs, asks one gentle check-in question, checks it is safe to talk and records signs for staff. |
 | `src/schemas.js`, `public/staff.js` | Staff report fields `disclosure` and `risk_indicators`. |
-| `public/` | Topic buttons: Children and family, Police and the law, and "Worries at home" (last). |
+| `public/` | One entry point for everyone: no topic pictures before the conversation, so nobody has to pick a category before they are ready. The conversation finds the topics. |
 
 ## Before a pilot
 
