@@ -2,7 +2,9 @@
 
 This guide puts the TACSI DV prototype (the domestic abuse version of TACSI) on the internet at its own web address, for example `https://tacsi-dv-prototype.onrender.com`, so that invited stakeholders (councils, charities, partners) can try it on their own computers. It is not for members of the public: only people who have the access code can use it.
 
-If you already run the original TACSI on Render, you can use the same Render account and the same API key: you create a second web service. You can use a different access code and staff PIN.
+**If TACSI is already on Render:** do not change your existing `tacsi-prototype` service. In Part 3, you create a **second, separate web service** in the same Render account, from the same GitHub repository, with the name `tacsi-dv-prototype` and the Root Directory `tacsi-dv`. The two services run side by side, each with its own web address. You can skip Part 1 and use the same API key, and you can choose a different access code and staff PIN.
+
+Because each service has its own Root Directory, Render only updates a service when files in its own folder change: changes to TACSI DV do not restart TACSI, and the other way round. (If you ever see both restart, open each service's **Settings**, find **Build Filters**, and add its folder, `tacsi/**` or `tacsi-dv/**`, under **Included Paths**.)
 
 TACSI runs on a hosting service called **Render**, which keeps it running around the clock. You click through Render's website; there is no programming.
 
