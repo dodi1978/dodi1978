@@ -1,0 +1,24 @@
+{
+  "name": "tacsi-dv",
+  "version": "0.1.0",
+  "description": "TACSI DV – TACSI for people affected by domestic abuse (prototype)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "build:demo": "node demo/build.mjs"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "zod": "^4.6.5"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
