@@ -51,7 +51,8 @@
         <section class="card">
           <h2>Use it over your slides</h2>
           <button class="btn primary wide" id="float-btn" type="button" style="margin-top:4px">Float chat over my slides</button>
-          <p class="hint" id="float-hint" style="margin-top:10px">Opens a small chat window that stays on top of PowerPoint, even in a full-screen slideshow. Drag it to a corner and resize it as you like.</p>
+          <p class="hint" id="float-hint" style="margin-top:10px">Opens a small chat window that stays on top of PowerPoint, even in a full-screen slideshow. Drag it to a corner and resize it. It opens in <strong>compact</strong> mode (messages only); use the buttons at its top for text size, a dark or light background, or to type.</p>
+          <p class="hint"><strong>Tip:</strong> after clicking in the chat window, click once on your slide before using your clicker or arrow keys, or the keys go to the chat.</p>
         </section>
 
         <section class="card">
@@ -204,8 +205,9 @@
       if (mini) {
         // Compact window (for browsers that can't float on top): just the chat.
         document.body.className = "floating";
-        floatInfo = el("span");
-        document.body.replaceChildren(el("div", { class: "float-wrap" }, el("div", { class: "float-head" }, el("span", {}, "Code ", el("strong", {}, code)), floatInfo, floatDownload()), panel));
+        const wrap = el("div", { class: "float-wrap" }, floatHead(document), panel);
+        document.body.replaceChildren(wrap);
+        applyFloatPrefs(document, wrap);
       }
       chat = createChat({
         mount: panel,
@@ -213,12 +215,12 @@
         auth: { key },
         onState: (s) => {
           document.title = `${s.title} · ClassChat`;
-          if (mini) return void (floatInfo.textContent = `${s.online} online${s.paused ? " · paused" : ""}`);
+          if (mini) return void (floatInfo.textContent = onlineText(s));
           $("dash-title").textContent = s.title;
           $("online").textContent = `${s.online} student${s.online === 1 ? "" : "s"} connected`;
           $("paused").checked = s.paused;
           $("anonymous").checked = s.anonymous;
-          if (floatInfo) floatInfo.textContent = `${s.online} online${s.paused ? " · paused" : ""}`;
+          if (floatInfo) floatInfo.textContent = onlineText(s);
         },
         onEnded: ended,
         onLost: ended,
@@ -296,23 +298,23 @@
         window.open(`/teacher?mini#${code}`, "classchat-mini", "width=400,height=600");
         return;
       }
-      floatWin = await documentPictureInPicture.requestWindow({ width: 380, height: 560 });
+      // Chrome and Edge reopen it where you last put it, at the size you last gave it.
+      const prefs = floatPrefs();
+      floatWin = await documentPictureInPicture.requestWindow(prefs.compact ? { width: 360, height: 280 } : { width: 380, height: 560 });
       const doc = floatWin.document;
       doc.title = `ClassChat ${code}`;
       for (const link of document.querySelectorAll('link[rel="stylesheet"]')) {
         doc.head.append(Object.assign(doc.createElement("link"), { rel: "stylesheet", href: link.href }));
       }
       doc.body.className = "floating";
-      floatInfo = el("span");
-      const head = el("div", { class: "float-head" }, el("span", {}, "Code ", el("strong", {}, code)), floatInfo, floatDownload());
-      const wrap = el("div", { class: "float-wrap" }, head);
+      const wrap = el("div", { class: "float-wrap" }, floatHead(doc));
       doc.body.append(wrap);
       wrap.append(panel); // move the live chat into the floating window
+      applyFloatPrefs(doc, wrap);
       $("floating-note").hidden = false;
       $("float-btn").textContent = "Chat is floating over your slides";
       chat.refresh();
-      const s = chat.state;
-      floatInfo.textContent = `${s.online ?? 0} online${s.paused ? " · paused" : ""}`;
+      floatInfo.textContent = onlineText(chat.state);
       floatWin.addEventListener("pagehide", () => {
         $("panel-home").prepend(panel);
         $("floating-note").hidden = true;
@@ -323,8 +325,64 @@
       });
     });
 
-    function floatDownload() {
-      return el("button", { class: "link", type: "button", title: "Download the chat as a Word document", onclick: () => (chat.messages.length ? download("word") : null) }, "⬇ Download");
+    // ---- Settings for the floating window, remembered on this computer ----
+    const onlineText = (s) => `${s.online ?? 0} online${s.paused ? " · paused" : ""}`;
+    const SIZES = [14, 16, 18, 21, 24, 28, 32];
+    function floatPrefs() {
+      const base = { compact: true, size: 18, theme: "light" };
+      try { return { ...base, ...JSON.parse(store.get("classchat:float") || "{}") }; } catch { return base; }
+    }
+    function saveFloatPrefs(p) { store.set("classchat:float", JSON.stringify(p)); }
+
+    function applyFloatPrefs(doc, wrap) {
+      const p = floatPrefs();
+      doc.documentElement.style.fontSize = p.size + "px";
+      doc.documentElement.dataset.theme = p.theme;
+      wrap.classList.toggle("compact", p.compact);
+      const q = (sel) => wrap.querySelector(sel);
+      q(".fh-mode").textContent = p.compact ? "⤢" : "⤡";
+      q(".fh-mode").title = p.compact ? "Show buttons and the typing box" : "Compact: only show the messages";
+      q(".fh-mode").setAttribute("aria-label", q(".fh-mode").title);
+      q(".fh-write").hidden = !p.compact;
+      q(".fh-theme").textContent = p.theme === "dark" ? "☀" : "☾";
+      q(".fh-theme").title = p.theme === "dark" ? "Light background" : "Dark background";
+      chat?.refresh();
+    }
+
+    // The bar at the top of the floating window.
+    function floatHead(doc) {
+      floatInfo = el("span", { class: "fh-info" });
+      const change = (fn) => () => {
+        const p = floatPrefs();
+        fn(p);
+        saveFloatPrefs(p);
+        applyFloatPrefs(doc, doc.querySelector(".float-wrap"));
+      };
+      const step = (dir) => change((p) => {
+        const i = SIZES.indexOf(p.size);
+        p.size = SIZES[Math.max(0, Math.min(SIZES.length - 1, (i < 0 ? 2 : i) + dir))];
+      });
+      const b = (cls, label, title, onclick) => el("button", { class: "fh-btn " + cls, type: "button", title, "aria-label": title, onclick }, label);
+      return el(
+        "div",
+        { class: "float-head" },
+        el("span", { class: "fh-code", title: "Join code" }, el("strong", {}, code)),
+        floatInfo,
+        el(
+          "span",
+          { class: "fh-tools" },
+          b("fh-write", "✏️", "Write a message", () => {
+            const wrap = doc.querySelector(".float-wrap");
+            wrap.classList.toggle("composing");
+            if (wrap.classList.contains("composing")) chat.focus();
+          }),
+          b("fh-smaller", "A−", "Smaller text", step(-1)),
+          b("fh-bigger", "A+", "Bigger text", step(1)),
+          b("fh-theme", "☾", "Dark background", change((p) => (p.theme = p.theme === "dark" ? "light" : "dark"))),
+          b("fh-mode", "⤢", "Show buttons and the typing box", change((p) => (p.compact = !p.compact))),
+          b("fh-download", "⬇", "Download the chat (Word document)", () => (chat.messages.length ? download("word") : null)),
+        ),
+      );
     }
 
     function closeFloat() {

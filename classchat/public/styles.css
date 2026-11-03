@@ -37,6 +37,25 @@
   }
 }
 
+/* The floating window's own dark background choice. */
+:root[data-theme="dark"] {
+  --bg: #111214;
+  --surface: #1d1e22;
+  --surface-2: #26282d;
+  --text: #f2f1ee;
+  --muted: #a8a49d;
+  --border: #393b41;
+  --accent: #7c9cff;
+  --accent-text: #0d1430;
+  --accent-soft: #273152;
+  --teacher: #3b331c;
+  --teacher-border: #8a7330;
+  --mine: #273152;
+  --danger: #ff8a80;
+  --focus: #7c9cff;
+  color-scheme: dark;
+}
+
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
@@ -45,7 +64,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 1rem/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 h1, h2 { line-height: 1.2; margin: 0 0 .5rem; }
@@ -366,12 +385,68 @@ input.code-input {
 /* ---- Floating window over the slides ---- */
 
 body.floating { background: var(--bg); }
-.float-wrap { display: flex; flex-direction: column; height: 100vh; padding: 8px 10px; }
-.float-head { display: flex; justify-content: space-between; align-items: center; font-size: .85rem; color: var(--muted); padding-bottom: 6px; gap: 8px; }
+.float-wrap { display: flex; flex-direction: column; height: 100vh; padding: 6px 10px 8px; }
+.float-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px; /* the bar stays the same size when the message text grows */
+  color: var(--muted);
+  padding-bottom: 6px;
+  white-space: nowrap;
+}
+.fh-info { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .float-head strong { color: var(--text); letter-spacing: .1em; }
+.fh-tools { margin-left: auto; display: flex; gap: 1px; flex-shrink: 0; }
+.fh-btn {
+  font: inherit;
+  font-weight: 600;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.fh-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
 .float-wrap #panel { flex: 1; min-height: 0; }
 body.floating .msg { max-width: 100%; }
 body.floating .chat-tools { padding-bottom: 4px; }
-body.floating .composer textarea { min-height: 38px; padding: 7px 10px; }
+/* The typing area keeps a normal size when the message text is made bigger. */
+.float-wrap .composer { font-size: 15px; }
+.float-wrap .composer .emoji-btn { font-size: 18px; min-height: 38px; }
+.float-wrap .composer textarea { min-height: 38px; padding: 7px 10px; }
+.float-wrap .reply-bar, .float-wrap .form-status { font-size: 12px; }
+.float-wrap .emoji { font-size: 20px; }
+.float-wrap .emoji-group { font-size: 11px; }
+
+/* Compact: just the messages, as small as possible. */
+.float-wrap.compact .chat-tools,
+.float-wrap.compact .actions,
+.float-wrap.compact .msg time,
+.float-wrap.compact .pin-tag,
+.float-wrap.compact .empty { display: none; }
+.float-wrap.compact:not(.composing) .composer { display: none; }
+.float-wrap.compact .messages { gap: 4px; }
+.float-wrap.compact .msg {
+  align-self: stretch;
+  max-width: none;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+.float-wrap.compact .msg .meta { display: inline; font-size: .8em; margin-right: .4em; }
+.float-wrap.compact .msg .text { display: inline; margin: 0; }
+.float-wrap.compact .msg .quote { font-size: .75em; margin: 0 0 2px; }
+.float-wrap.compact .pinned { font-size: .85em; padding: 4px 8px; margin-bottom: 4px; max-height: 25%; }
+.float-wrap.compact .scroller { scrollbar-width: thin; }
+
+/* A new message glows for a few seconds. */
+@keyframes arrive {
+  from { box-shadow: 0 0 0 2px var(--accent); background: var(--accent-soft); }
+  to { box-shadow: 0 0 0 2px transparent; }
+}
+.msg.fresh { animation: arrive 4s ease-out both; }
 
 [hidden] { display: none !important; }
