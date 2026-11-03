@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClassChat</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="page">
+    <div class="narrow">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">💬</span> ClassChat</div>
+      <form class="card" id="join">
+        <h1>Join your class</h1>
+        <p class="hint">Type the code your teacher is showing.</p>
+        <label for="code">Class code</label>
+        <input class="code-input" id="code" type="text" maxlength="5" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+        <p class="form-status" id="status" role="status"></p>
+        <button class="btn primary wide" type="submit">Next</button>
+      </form>
+      <p class="hint" style="text-align:center;margin-top:18px">Teaching? <a href="/teacher">Start a class session</a></p>
+    </div>
+  </main>
+  <script type="module">
+    const form = document.getElementById("join");
+    const code = document.getElementById("code");
+    const status = document.getElementById("status");
+    code.focus();
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const value = code.value.trim().toUpperCase();
+      status.textContent = "";
+      const res = await fetch(`/api/rooms/${encodeURIComponent(value)}`);
+      if (res.ok) location.href = `/j/${value}`;
+      else status.textContent = "No class session with that code. Check it with your teacher.";
+    });
+  </script>
+</body>
+</html>

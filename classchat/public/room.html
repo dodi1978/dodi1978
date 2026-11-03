@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <title>ClassChat</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="page" id="name-step" hidden>
+    <div class="narrow">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">💬</span> ClassChat</div>
+      <form class="card" id="name-form">
+        <h1 id="room-title">Join the class</h1>
+        <label for="name">Your name</label>
+        <input id="name" type="text" maxlength="30" autocomplete="nickname" required>
+        <p class="hint">This is what classmates see next to your messages.</p>
+        <p class="form-status" id="name-status" role="status"></p>
+        <button class="btn primary wide" type="submit">Join</button>
+      </form>
+    </div>
+  </main>
+
+  <div class="room" id="chat-step" hidden>
+    <header class="room-head">
+      <div>
+        <h1 id="chat-title">Class chat</h1>
+        <span class="hint" id="whoami"></span>
+      </div>
+      <button class="btn" id="leave" type="button">Leave</button>
+    </header>
+    <div class="banner" id="anon-banner" hidden>Names are hidden: classmates see you as “Classmate”. Your teacher can still see your name.</div>
+    <div class="banner" id="paused-banner" hidden>The teacher has paused the chat for now.</div>
+    <div class="room-body" id="panel"></div>
+  </div>
+
+  <main class="page" id="ended-step" hidden>
+    <div class="narrow card">
+      <h1>This session has ended</h1>
+      <p>Thanks for taking part!</p>
+      <a class="btn primary" href="/">Join another class</a>
+    </div>
+  </main>
+
+  <script type="module">
+    import { api, createChat } from "/chat.js";
+
+    const code = (location.pathname.match(/^\/j\/([A-Za-z0-9]{5})$/)?.[1] || new URLSearchParams(location.search).get("code") || "").toUpperCase();
+    const storeKey = `classchat:${code}`;
+    const $ = (id) => document.getElementById(id);
+    const show = (id) => ["name-step", "chat-step", "ended-step"].forEach((s) => ($(s).hidden = s !== id));
+
+    function saved() {
+      try { return JSON.parse(localStorage.getItem(storeKey)); } catch { return null; }
+    }
+    function save(v) {
+      try { v ? localStorage.setItem(storeKey, JSON.stringify(v)) : localStorage.removeItem(storeKey); } catch {}
+    }
+    try { $("name").value = localStorage.getItem("classchat:lastName") || ""; } catch {}
+
+    async function start() {
+      if (!code) return (location.href = "/");
+      let room;
+      try {
+        room = await api(`/api/rooms/${code}`);
+      } catch {
+        save(null);
+        return show("ended-step");
+      }
+      document.title = `${room.title} · ClassChat`;
+      $("room-title").textContent = room.title;
+      $("chat-title").textContent = room.title;
+      const pass = saved();
+      if (pass?.token) openChat(pass);
+      else {
+        show("name-step");
+        $("name").focus();
+      }
+    }
+
+    $("name-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      $("name-status").textContent = "";
+      try {
+        const pass = await api(`/api/rooms/${code}/join`, { method: "POST", body: { name: $("name").value } });
+        save(pass);
+        try { localStorage.setItem("classchat:lastName", pass.name); } catch {}
+        openChat(pass);
+      } catch (err) {
+        $("name-status").textContent = err.message;
+      }
+    });
+
+    function openChat(pass) {
+      show("chat-step");
+      $("whoami").textContent = `You are ${pass.name} · code ${code}`;
+      const chat = createChat({
+        mount: $("panel"),
+        code,
+        auth: { token: pass.token },
+        onState: (s) => {
+          $("chat-title").textContent = s.title;
+          $("anon-banner").hidden = !s.anonymous;
+          $("paused-banner").hidden = !s.paused;
+        },
+        onEnded: () => { save(null); show("ended-step"); },
+        onLost: () => { save(null); show("name-step"); },
+      });
+      chat.focus();
+      $("leave").onclick = () => {
+        if (!confirm("Leave this class chat?")) return;
+        chat.close();
+        save(null);
+        location.href = "/";
+      };
+    }
+
+    start();
+  </script>
+</body>
+</html>
