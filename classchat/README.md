@@ -6,7 +6,7 @@ It runs in any web browser, so it doesn't need to plug into your employer's syst
 
 ## What it does
 
-**Students** go to the website, type the 5-letter code (or scan the QR code), pick a name and chat. They can like messages, reply to a message, and delete their own messages.
+**Students** go to the website, type the 5-letter code (or scan the QR code), pick a name and chat. They can add emojis with the 😊 button, like messages, reply to a message, and delete their own messages.
 
 **You (the teacher)** get:
 
@@ -16,7 +16,8 @@ It runs in any web browser, so it doesn't need to plug into your employer's syst
 - **Most liked first**: sort the chat so the questions the class cares most about rise to the top
 - **Pause the chat**: students can read but not post
 - **Hide student names from classmates**: encourages shy students. You still see who wrote what.
-- delete any message, clear the chat, **download the chat** as a text file, and end the session
+- **Download chat** (button at the top of the chat, or ⬇ in the floating window): saves the chat as a **Word document** or a **text file**, with emojis, replies and likes. When you end a session, it offers to download first.
+- delete any message, clear the chat, and end the session
 
 ## Using it over PowerPoint
 
@@ -61,7 +62,8 @@ Open http://localhost:3000/teacher. To test as a student, open http://localhost:
 ## For developers
 
 - `server.js`: plain Node.js with no dependencies. It handles the API and live updates (Server-Sent Events).
-- `public/chat.js`: the chat panel used by both the student and teacher pages.
+- `public/chat.js`: the chat panel used by both the student and teacher pages, including the emoji picker.
+- `public/download.js`: turns the chat into a Word or text file, in the browser.
 - `public/teacher.html`: the teacher dashboard, including the floating window (Document Picture-in-Picture API).
 - `public/room.html`: the student page. `public/index.html`: enter a code.
 - `public/vendor/qrcode.js`: QR code generator (MIT licence, Kazuhiko Arase).

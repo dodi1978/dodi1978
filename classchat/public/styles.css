@@ -226,6 +226,35 @@ input.code-input {
 .like:hover { border-color: var(--border); }
 .like.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
 
+.composer { position: relative; }
+.emoji-btn { padding: 8px 10px; font-size: 1.15rem; line-height: 1; min-height: 44px; }
+.emoji-panel {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-width: 360px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / .15);
+  padding: 6px 10px 10px;
+  z-index: 5;
+}
+.emoji-group { font-size: .75rem; color: var(--muted); margin: 6px 0 2px; font-weight: 600; }
+.emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); }
+.emoji {
+  font-size: 1.35rem;
+  line-height: 1;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+.emoji:hover, .emoji:focus-visible { background: var(--surface-2); }
 .composer { padding-top: 10px; border-top: 1px solid var(--border); margin-top: 8px; }
 .composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .composer textarea { resize: none; min-height: 44px; }
@@ -297,6 +326,11 @@ input.code-input {
 .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .panel-head h2 { margin: 0; }
 .online { color: var(--muted); font-size: .9rem; }
+.panel-tools { display: flex; align-items: center; gap: 12px; }
+
+.dialog { max-width: 420px; width: calc(100% - 32px); color: var(--text); }
+.dialog::backdrop { background: rgb(0 0 0 / .4); }
+.dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 #panel { flex: 1; min-height: 0; }
 .placeholder {
   flex: 1;
