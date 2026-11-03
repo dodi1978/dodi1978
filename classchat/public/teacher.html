@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClassChat · Teacher</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/vendor/qrcode.js"></script>
+</head>
+<body>
+  <main class="page" id="setup-step" hidden>
+    <div class="narrow">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">💬</span> ClassChat · Teacher</div>
+      <div class="card" id="resume" hidden>
+        <h2>Carry on where you left off?</h2>
+        <p class="hint" id="resume-text"></p>
+        <a class="btn primary" id="resume-link" href="#">Open that session</a>
+      </div>
+      <form class="card" id="setup" style="margin-top:16px">
+        <h1>Start a class session</h1>
+        <label for="title">Session name</label>
+        <input id="title" type="text" maxlength="80" placeholder="e.g. Week 5 seminar">
+        <label for="teacher-name">Your name (as students will see it)</label>
+        <input id="teacher-name" type="text" maxlength="30" placeholder="e.g. Dr Dippold">
+        <div id="code-field" hidden>
+          <label for="teacher-code">Teacher code</label>
+          <input id="teacher-code" type="password" autocomplete="current-password">
+          <p class="hint">The private code you chose when putting ClassChat online.</p>
+        </div>
+        <p class="form-status" id="setup-status" role="status"></p>
+        <button class="btn primary wide" type="submit">Start session</button>
+      </form>
+    </div>
+  </main>
+
+  <main class="page" id="dash-step" hidden>
+    <div class="dash">
+      <aside class="side">
+        <section class="card join-card">
+          <p class="hint">Students go to</p>
+          <p class="join-url" id="join-host"></p>
+          <p class="hint">and type</p>
+          <p class="join-code" id="join-code"></p>
+          <div class="qr" id="qr"></div>
+          <div class="stack" style="margin-top:12px">
+            <button class="btn" id="projector-btn" type="button">Show join screen to class</button>
+            <button class="btn" id="copy-btn" type="button">Copy join link</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Use it over your slides</h2>
+          <button class="btn primary wide" id="float-btn" type="button" style="margin-top:4px">Float chat over my slides</button>
+          <p class="hint" id="float-hint" style="margin-top:10px">Opens a small chat window that stays on top of PowerPoint, even in a full-screen slideshow. Drag it to a corner and resize it as you like.</p>
+        </section>
+
+        <section class="card">
+          <h2>Session settings</h2>
+          <label class="toggle"><input type="checkbox" id="paused"> <span>Pause the chat<br><span class="hint">Students can read but not post.</span></span></label>
+          <label class="toggle"><input type="checkbox" id="anonymous"> <span>Hide student names from classmates<br><span class="hint">You still see who wrote what.</span></span></label>
+          <div class="stack" style="margin-top:12px">
+            <button class="btn" id="download-btn" type="button">Download the chat (text file)</button>
+            <button class="btn danger" id="clear-btn" type="button">Clear all messages</button>
+            <button class="btn danger" id="end-btn" type="button">End session</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="card panel-card">
+        <div class="panel-head">
+          <h2 id="dash-title">Class chat</h2>
+          <span class="online" id="online"></span>
+        </div>
+        <div id="panel-home" style="flex:1;min-height:0;display:flex;flex-direction:column">
+          <div id="panel"></div>
+          <div class="placeholder" id="floating-note" hidden>
+            <div>
+              <p><strong>The chat is floating over your slides.</strong></p>
+              <p>Close the small window to bring it back here.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="projector" id="projector" hidden>
+    <div>
+      <p class="join-url">Go to <strong id="proj-host"></strong> and type</p>
+      <p class="join-code" id="proj-code"></p>
+      <div class="qr" id="proj-qr"></div>
+      <p class="hint" style="margin-top:16px">…or scan the QR code with your phone camera. Press Esc or click anywhere to close.</p>
+    </div>
+  </div>
+
+  <main class="page" id="ended-step" hidden>
+    <div class="narrow card">
+      <h1>Session ended</h1>
+      <p>The chat has been deleted from the server.</p>
+      <a class="btn primary" href="/teacher">Start a new session</a>
+    </div>
+  </main>
+
+  <script type="module">
+    import { api, createChat, el } from "/chat.js";
+
+    const $ = (id) => document.getElementById(id);
+    const show = (id) => ["setup-step", "dash-step", "ended-step"].forEach((s) => ($(s).hidden = s !== id));
+    const keyFor = (code) => `classchat:teacher:${code}`;
+    const store = {
+      get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+      set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
+    };
+
+    let chat = null;
+    const panel = $("panel"); // keep hold of it: it moves between windows
+    const mini = new URLSearchParams(location.search).has("mini");
+    let code = location.hash.slice(1).toUpperCase();
+    let key = code ? store.get(keyFor(code)) : null;
+
+    async function start() {
+      if (code && key) {
+        try {
+          await api(`/api/rooms/${code}`);
+          return openDash();
+        } catch {
+          store.set(keyFor(code), null);
+        }
+      }
+      history.replaceState(null, "", "/teacher");
+      const last = store.get("classchat:teacher:last");
+      if (last && store.get(keyFor(last))) {
+        try {
+          const r = await api(`/api/rooms/${last}`);
+          $("resume").hidden = false;
+          $("resume-text").textContent = `“${r.title}” (code ${last}) is still open.`;
+          $("resume-link").href = `/teacher#${last}`;
+        } catch {}
+      }
+      try {
+        const cfg = await api("/api/config");
+        $("code-field").hidden = !cfg.teacherCodeRequired;
+        $("teacher-code").required = cfg.teacherCodeRequired;
+      } catch {}
+      $("teacher-name").value = store.get("classchat:teacher:name") || "";
+      show("setup-step");
+    }
+
+    $("setup").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      $("setup-status").textContent = "";
+      try {
+        const r = await api("/api/rooms", {
+          method: "POST",
+          body: { title: $("title").value, teacherName: $("teacher-name").value, teacherCode: $("teacher-code").value },
+        });
+        code = r.code;
+        key = r.teacherKey;
+        store.set(keyFor(code), key);
+        store.set("classchat:teacher:last", code);
+        store.set("classchat:teacher:name", $("teacher-name").value);
+        history.replaceState(null, "", `/teacher#${code}`);
+        openDash();
+      } catch (err) {
+        $("setup-status").textContent = err.message;
+      }
+    });
+
+    const joinUrl = () => `${location.origin}/j/${code}`;
+
+    function qrSvg() {
+      const qr = qrcode(0, "M");
+      qr.addData(joinUrl());
+      qr.make();
+      return qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true, alt: "QR code to join" });
+    }
+
+    function openDash() {
+      show("dash-step");
+      $("join-code").textContent = code;
+      $("proj-code").textContent = code;
+      $("join-host").textContent = location.host;
+      $("proj-host").textContent = location.host;
+      $("qr").innerHTML = qrSvg();
+      $("proj-qr").innerHTML = qrSvg();
+
+      if (mini) {
+        // Compact window (for browsers that can't float on top): just the chat.
+        document.body.className = "floating";
+        floatInfo = el("span");
+        document.body.replaceChildren(el("div", { class: "float-wrap" }, el("div", { class: "float-head" }, el("span", {}, "Code ", el("strong", {}, code)), floatInfo), panel));
+      }
+      chat = createChat({
+        mount: panel,
+        code,
+        auth: { key },
+        onState: (s) => {
+          document.title = `${s.title} · ClassChat`;
+          if (mini) return void (floatInfo.textContent = `${s.online} online${s.paused ? " · paused" : ""}`);
+          $("dash-title").textContent = s.title;
+          $("online").textContent = `${s.online} student${s.online === 1 ? "" : "s"} connected`;
+          $("paused").checked = s.paused;
+          $("anonymous").checked = s.anonymous;
+          if (floatInfo) floatInfo.textContent = `${s.online} online${s.paused ? " · paused" : ""}`;
+        },
+        onEnded: ended,
+        onLost: ended,
+      });
+    }
+
+    function ended() {
+      store.set(keyFor(code), null);
+      closeFloat();
+      if (mini) return document.body.replaceChildren(el("div", { class: "float-wrap" }, el("p", {}, "This session has ended.")));
+      show("ended-step");
+    }
+
+    const setting = (body) => api(`/api/rooms/${code}/settings`, { method: "POST", body, auth: { key } }).catch((e) => alert(e.message));
+    $("paused").addEventListener("change", (e) => setting({ paused: e.target.checked }));
+    $("anonymous").addEventListener("change", (e) => setting({ anonymous: e.target.checked }));
+
+    $("clear-btn").addEventListener("click", async () => {
+      if (!confirm("Delete every message in this session for everyone?")) return;
+      await api(`/api/rooms/${code}/clear`, { method: "POST", auth: { key } }).catch((e) => alert(e.message));
+    });
+    $("end-btn").addEventListener("click", async () => {
+      if (!confirm("End the session? Students will be disconnected and all messages deleted. You may want to download the chat first.")) return;
+      await api(`/api/rooms/${code}/end`, { method: "POST", auth: { key } }).catch(() => {});
+      ended();
+    });
+
+    $("download-btn").addEventListener("click", () => {
+      const lines = chat.messages
+        .slice()
+        .sort((a, b) => a.id - b.id)
+        .map((m) => `[${new Date(m.at).toLocaleTimeString()}] ${m.name}${m.role === "teacher" ? " (teacher)" : ""}: ${m.text}${m.likes ? `  (👍 ${m.likes})` : ""}`);
+      const text = `${chat.state.title} – ${new Date().toLocaleDateString()}\n\n${lines.join("\n")}\n`;
+      const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: `classchat-${code}.txt` });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+
+    $("copy-btn").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(joinUrl());
+        $("copy-btn").textContent = "Copied!";
+      } catch {
+        prompt("Copy this link:", joinUrl());
+      }
+      setTimeout(() => ($("copy-btn").textContent = "Copy join link"), 1500);
+    });
+
+    const projector = $("projector");
+    $("projector-btn").addEventListener("click", () => {
+      projector.hidden = false;
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    });
+    const closeProjector = () => {
+      projector.hidden = true;
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+    projector.addEventListener("click", closeProjector);
+    document.addEventListener("keydown", (e) => e.key === "Escape" && !projector.hidden && closeProjector());
+    document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) projector.hidden = true; });
+
+    // ---- Floating window over the slides (Document Picture-in-Picture, in Chrome and Edge) ----
+    let floatWin = null;
+    let floatInfo = null;
+    const canFloat = "documentPictureInPicture" in window;
+    if (!canFloat) {
+      $("float-hint").textContent = "Your browser can't keep a window on top of PowerPoint. Use Google Chrome or Microsoft Edge for this. Until then, this opens a small separate window you can place beside your slides.";
+    }
+
+    $("float-btn").addEventListener("click", async () => {
+      if (floatWin) return floatWin.focus();
+      if (!canFloat) {
+        window.open(`/teacher?mini#${code}`, "classchat-mini", "width=400,height=600");
+        return;
+      }
+      floatWin = await documentPictureInPicture.requestWindow({ width: 380, height: 560 });
+      const doc = floatWin.document;
+      doc.title = `ClassChat ${code}`;
+      for (const link of document.querySelectorAll('link[rel="stylesheet"]')) {
+        doc.head.append(Object.assign(doc.createElement("link"), { rel: "stylesheet", href: link.href }));
+      }
+      doc.body.className = "floating";
+      floatInfo = el("span");
+      const head = el("div", { class: "float-head" }, el("span", {}, "Code ", el("strong", {}, code)), floatInfo);
+      const wrap = el("div", { class: "float-wrap" }, head);
+      doc.body.append(wrap);
+      wrap.append(panel); // move the live chat into the floating window
+      $("floating-note").hidden = false;
+      $("float-btn").textContent = "Chat is floating over your slides";
+      chat.refresh();
+      const s = chat.state;
+      floatInfo.textContent = `${s.online ?? 0} online${s.paused ? " · paused" : ""}`;
+      floatWin.addEventListener("pagehide", () => {
+        $("panel-home").prepend(panel);
+        $("floating-note").hidden = true;
+        $("float-btn").textContent = "Float chat over my slides";
+        floatWin = null;
+        floatInfo = null;
+        chat.refresh();
+      });
+    });
+
+    function closeFloat() {
+      floatWin?.close();
+    }
+
+    window.addEventListener("hashchange", () => location.reload());
+
+    start();
+  </script>
+</body>
+</html>

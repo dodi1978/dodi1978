@@ -1,0 +1,16 @@
+{
+  "name": "classchat",
+  "version": "0.1.0",
+  "description": "ClassChat – a live chat for the classroom that floats over your slides",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  }
+}
