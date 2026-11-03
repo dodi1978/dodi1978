@@ -59,7 +59,7 @@
           <label class="toggle"><input type="checkbox" id="paused"> <span>Pause the chat<br><span class="hint">Students can read but not post.</span></span></label>
           <label class="toggle"><input type="checkbox" id="anonymous"> <span>Hide student names from classmates<br><span class="hint">You still see who wrote what.</span></span></label>
           <div class="stack" style="margin-top:12px">
-            <button class="btn" id="download-btn" type="button">Download the chat (text file)</button>
+            <button class="btn" id="download-btn" type="button">⬇ Download the chat</button>
             <button class="btn danger" id="clear-btn" type="button">Clear all messages</button>
             <button class="btn danger" id="end-btn" type="button">End session</button>
           </div>
@@ -69,7 +69,10 @@
       <section class="card panel-card">
         <div class="panel-head">
           <h2 id="dash-title">Class chat</h2>
-          <span class="online" id="online"></span>
+          <div class="panel-tools">
+            <span class="online" id="online"></span>
+            <button class="btn" id="download-top" type="button">⬇ Download chat</button>
+          </div>
         </div>
         <div id="panel-home" style="flex:1;min-height:0;display:flex;flex-direction:column">
           <div id="panel"></div>
@@ -83,6 +86,19 @@
       </section>
     </div>
   </main>
+
+  <dialog class="card dialog" id="download-dialog">
+    <form method="dialog">
+      <h2>Download the chat</h2>
+      <p class="hint">Saves everything in the chat right now, including emojis, replies and likes. Download before you end the session: ending deletes the chat.</p>
+      <label class="toggle"><input type="radio" name="format" value="word" checked> <span>Word document<br><span class="hint">Opens in Microsoft Word, as a table.</span></span></label>
+      <label class="toggle"><input type="radio" name="format" value="text"> <span>Text file<br><span class="hint">Plain text, opens anywhere.</span></span></label>
+      <div class="dialog-buttons">
+        <button class="btn" value="cancel" type="submit">Cancel</button>
+        <button class="btn primary" value="download" type="submit">Download</button>
+      </div>
+    </form>
+  </dialog>
 
   <div class="projector" id="projector" hidden>
     <div>
@@ -103,6 +119,7 @@
 
   <script type="module">
     import { api, createChat, el } from "/chat.js";
+    import { downloadChat } from "/download.js";
 
     const $ = (id) => document.getElementById(id);
     const show = (id) => ["setup-step", "dash-step", "ended-step"].forEach((s) => ($(s).hidden = s !== id));
@@ -188,7 +205,7 @@
         // Compact window (for browsers that can't float on top): just the chat.
         document.body.className = "floating";
         floatInfo = el("span");
-        document.body.replaceChildren(el("div", { class: "float-wrap" }, el("div", { class: "float-head" }, el("span", {}, "Code ", el("strong", {}, code)), floatInfo), panel));
+        document.body.replaceChildren(el("div", { class: "float-wrap" }, el("div", { class: "float-head" }, el("span", {}, "Code ", el("strong", {}, code)), floatInfo, floatDownload()), panel));
       }
       chat = createChat({
         mount: panel,
@@ -224,21 +241,23 @@
       await api(`/api/rooms/${code}/clear`, { method: "POST", auth: { key } }).catch((e) => alert(e.message));
     });
     $("end-btn").addEventListener("click", async () => {
-      if (!confirm("End the session? Students will be disconnected and all messages deleted. You may want to download the chat first.")) return;
+      if (!confirm("End the session? Students will be disconnected and all messages deleted.")) return;
+      if (chat.messages.length && confirm("Download a copy of the chat (Word document) before it is deleted?")) download("word");
       await api(`/api/rooms/${code}/end`, { method: "POST", auth: { key } }).catch(() => {});
       ended();
     });
 
-    $("download-btn").addEventListener("click", () => {
-      const lines = chat.messages
-        .slice()
-        .sort((a, b) => a.id - b.id)
-        .map((m) => `[${new Date(m.at).toLocaleTimeString()}] ${m.name}${m.role === "teacher" ? " (teacher)" : ""}: ${m.text}${m.likes ? `  (👍 ${m.likes})` : ""}`);
-      const text = `${chat.state.title} – ${new Date().toLocaleDateString()}\n\n${lines.join("\n")}\n`;
-      const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: `classchat-${code}.txt` });
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    const download = (format) => downloadChat({ title: chat.state.title || "Class chat", code, messages: chat.messages, format });
+    const dialog = $("download-dialog");
+    const openDownload = () => {
+      if (!chat.messages.length) return alert("There are no messages to download yet.");
+      dialog.showModal();
+    };
+    dialog.addEventListener("close", () => {
+      if (dialog.returnValue === "download") download(new FormData(dialog.querySelector("form")).get("format"));
     });
+    $("download-btn").addEventListener("click", openDownload);
+    $("download-top").addEventListener("click", openDownload);
 
     $("copy-btn").addEventListener("click", async () => {
       try {
@@ -285,7 +304,7 @@
       }
       doc.body.className = "floating";
       floatInfo = el("span");
-      const head = el("div", { class: "float-head" }, el("span", {}, "Code ", el("strong", {}, code)), floatInfo);
+      const head = el("div", { class: "float-head" }, el("span", {}, "Code ", el("strong", {}, code)), floatInfo, floatDownload());
       const wrap = el("div", { class: "float-wrap" }, head);
       doc.body.append(wrap);
       wrap.append(panel); // move the live chat into the floating window
@@ -303,6 +322,10 @@
         chat.refresh();
       });
     });
+
+    function floatDownload() {
+      return el("button", { class: "link", type: "button", title: "Download the chat as a Word document", onclick: () => (chat.messages.length ? download("word") : null) }, "⬇ Download");
+    }
 
     function closeFloat() {
       floatWin?.close();

@@ -22,6 +22,13 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+// The emojis offered by the 😊 button, in groups.
+const EMOJIS = [
+  ["Faces", "🙂 😀 😄 😂 🤣 😊 😍 🥰 😎 🤓 🤔 🧐 😮 😲 🤯 😕 😟 😢 😭 😅 😬 🙃 😴 🥱 😇 🥳 🤩 🙈"],
+  ["Reactions", "👍 👎 👏 🙌 🙏 💪 👋 ✋ 🤝 👌 ✌️ 🤞 👀 ❤️ 💯 🔥 ⭐ ✨"],
+  ["Class", "✅ ❌ ❓ ❗ 💡 📚 📖 ✏️ 📝 📌 🎯 🧠 🗣️ 💬 🌍 ⏰ ☕ 🎉"],
+].map(([name, list]) => [name, list.split(" ")]);
+
 const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /**
@@ -44,8 +51,17 @@ export function createChat({ mount, code, auth, onState = () => {}, onEnded = ()
   const replyBar = el("div", { class: "reply-bar", hidden: true });
   const input = el("textarea", { rows: 1, maxlength: 500, placeholder: "Type a message…", "aria-label": "Message" });
   const sendBtn = el("button", { class: "btn primary", type: "submit" }, "Send");
+  const emojiBtn = el("button", { class: "btn emoji-btn", type: "button", title: "Add an emoji", "aria-label": "Add an emoji", "aria-expanded": "false" }, "😊");
+  const emojiPanel = el(
+    "div",
+    { class: "emoji-panel", hidden: true, role: "dialog", "aria-label": "Emojis" },
+    EMOJIS.map(([name, list]) => [
+      el("p", { class: "emoji-group" }, name),
+      el("div", { class: "emoji-grid" }, list.map((e) => el("button", { type: "button", class: "emoji", "aria-label": e, onclick: () => insertEmoji(e) }, e))),
+    ]).flat(),
+  );
   const status = el("p", { class: "form-status", role: "status" });
-  const form = el("form", { class: "composer" }, replyBar, el("div", { class: "composer-row" }, input, sendBtn), status);
+  const form = el("form", { class: "composer" }, replyBar, emojiPanel, el("div", { class: "composer-row" }, emojiBtn, input, sendBtn), status);
   const sortBtn = el("button", { class: "chip", type: "button", title: "Switch order" }, "Latest first ⇅");
 
   mount.replaceChildren(el("div", { class: "chat" }, el("div", { class: "chat-tools" }, sortBtn), pinnedBox, scroller, form));
@@ -74,6 +90,7 @@ export function createChat({ mount, code, auth, onState = () => {}, onEnded = ()
       input.value = "";
       grow();
       setReply(null);
+      toggleEmojis(false);
       stickToBottom = true;
     } catch (err) {
       status.textContent = err.message;
@@ -82,6 +99,37 @@ export function createChat({ mount, code, auth, onState = () => {}, onEnded = ()
       input.focus();
     }
   });
+
+  // ---- Emoji picker ----
+  function toggleEmojis(open = emojiPanel.hidden) {
+    emojiPanel.hidden = !open;
+    emojiBtn.setAttribute("aria-expanded", String(open));
+    // Close when clicking elsewhere. Listen on the window the chat is in right now (it may be floating).
+    const doc = form.ownerDocument;
+    if (open) setTimeout(() => doc.addEventListener("pointerdown", outside), 0);
+    else doc.removeEventListener("pointerdown", outside);
+  }
+  function outside(e) {
+    if (!emojiPanel.contains(e.target) && e.target !== emojiBtn) toggleEmojis(false);
+  }
+  emojiBtn.addEventListener("click", () => toggleEmojis());
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !emojiPanel.hidden) {
+      toggleEmojis(false);
+      input.focus();
+    }
+  });
+
+  function insertEmoji(emoji) {
+    if (input.disabled) return;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
+    const pos = start + emoji.length;
+    input.focus();
+    input.setSelectionRange(pos, pos);
+    grow();
+  }
 
   function grow() {
     input.style.height = "auto";
@@ -167,6 +215,7 @@ export function createChat({ mount, code, auth, onState = () => {}, onEnded = ()
     const locked = s.paused && me?.role !== "teacher";
     input.disabled = locked;
     sendBtn.disabled = locked;
+    emojiBtn.disabled = locked;
     input.placeholder = locked ? "The teacher has paused the chat." : "Type a message…";
     onState(s);
   }
