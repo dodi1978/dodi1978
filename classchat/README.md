@@ -32,6 +32,9 @@ Other browsers (Firefox, Safari) can't keep a window on top. There, the button o
 
 ## Privacy
 
+- **No AI, no outside services.** ClassChat contains no AI and doesn't call any API (Claude, OpenAI or any other). The server uses only Node.js's built-in parts and has no add-on packages. The pages load nothing from other websites, and the QR code is created on the device. Nothing typed in the chat is sent anywhere that could use it to train AI.
+- **Hosting:** the app runs on Render, a normal hosting company, not an AI service. Its data processing agreement covers how it handles data on its servers.
+- **Students' devices:** some phone keyboards or browser assistants have their own AI features that read what you type. That's a setting on the student's device and outside the app's control.
 - Messages are kept **only in the server's memory**. Nothing is saved to disk.
 - **Ending the session** deletes everything. Sessions nobody uses for 12 hours are deleted automatically. A server restart also deletes everything.
 - Students choose their own display name (a nickname is fine). No email or login.
