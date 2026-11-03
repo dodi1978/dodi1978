@@ -38,6 +38,8 @@ const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minu
  */
 export function createChat({ mount, code, auth, onState = () => {}, onEnded = () => {}, onLost = () => {} }) {
   const messages = new Map();
+  const arrived = new Map(); // message id -> when it arrived live, to highlight new messages briefly
+  const FRESH_MS = 4000;
   let me = null;
   let state = {};
   let sort = "latest";
@@ -166,6 +168,18 @@ export function createChat({ mount, code, auth, onState = () => {}, onEnded = ()
     }
   }
 
+  // A new message glows for a few seconds. Re-drawing the list carries on the glow where it was.
+  const freshFor = (m) => {
+    const t = arrived.get(m.id);
+    if (t && Date.now() - t < FRESH_MS) return Date.now() - t;
+    arrived.delete(m.id);
+    return 0;
+  };
+  const freshStyle = (m) => {
+    const age = freshFor(m);
+    return age ? `animation-delay:-${age}ms` : null;
+  };
+
   function bubble(m) {
     const mine = me && m.authorId === me.id;
     const teacher = me?.role === "teacher";
@@ -185,7 +199,7 @@ export function createChat({ mount, code, auth, onState = () => {}, onEnded = ()
     );
     return el(
       "li",
-      { class: ["msg", mine && "mine", m.role === "teacher" && "from-teacher", m.pinned && "is-pinned"].filter(Boolean).join(" "), "data-id": m.id },
+      { style: freshStyle(m), class: [freshFor(m) && "fresh", "msg", mine && "mine", m.role === "teacher" && "from-teacher", m.pinned && "is-pinned"].filter(Boolean).join(" "), "data-id": m.id },
       el("div", { class: "meta" }, el("strong", {}, m.role === "teacher" ? `${m.name} (teacher)` : mine ? `${m.name} (you)` : m.name), el("time", {}, time(m.at)), m.pinned ? el("span", { class: "pin-tag" }, "📌 pinned") : null),
       parent ? el("div", { class: "quote" }, el("strong", {}, parent.name), " ", snippet(parent.text)) : null,
       el("p", { class: "text" }, m.text),
@@ -235,6 +249,7 @@ export function createChat({ mount, code, auth, onState = () => {}, onEnded = ()
     source.addEventListener("message", (e) => {
       const m = JSON.parse(e.data);
       messages.set(m.id, m);
+      if (m.authorId !== me?.id) arrived.set(m.id, Date.now());
       renderAll();
     });
     source.addEventListener("update", (e) => {

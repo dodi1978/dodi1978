@@ -19,15 +19,32 @@ It runs in any web browser, so it doesn't need to plug into your employer's syst
 - **Download chat** (button at the top of the chat, or ⬇ in the floating window): saves the chat as a **Word document** or a **text file**, with emojis, replies and likes. When you end a session, it offers to download first.
 - delete any message, clear the chat, and end the session
 
-## Using it over PowerPoint
+## Using it over PowerPoint (Windows)
 
-1. Open the teacher page in **Google Chrome** or **Microsoft Edge** and start a session.
-2. Show the join screen, let students join, then start your slideshow.
-3. Before the slideshow, or by switching to the browser for a moment (Alt+Tab), click **Float chat over my slides**.
-4. A small chat window appears. Drag it to a corner and resize it. It stays on top of the slideshow.
-5. Close the small window to put the chat back on the teacher page.
+1. Open the teacher page in **Microsoft Edge** or **Google Chrome** and start a session.
+2. Show the join screen and let students join.
+3. Click **Float chat over my slides**. A small chat window appears.
+4. Start your PowerPoint slideshow. The chat window stays on top of it.
+5. Drag the window to a corner of the slide and resize it by pulling its edges. Next time, it opens in the same place at the same size.
 
-Try it once before class. If you use two screens (projector + laptop), you can put the floating window on your laptop screen only, so students see your slides and you see the chat. To share the chat with the class, put it on the projector screen.
+The buttons at the top of the floating window:
+
+| Button | What it does |
+|---|---|
+| ✏️ | Show or hide the typing box, to write a message |
+| A− / A+ | Smaller or bigger message text, so the room can read it |
+| ☾ / ☀ | Dark or light background, to suit your slides |
+| ⤢ / ⤡ | Show everything (likes, replies, pins, the typing box) or go back to compact |
+| ⬇ | Download the chat as a Word document |
+
+It starts in **compact** mode: just the messages, newest at the bottom, without buttons, so it can be small. New messages glow for a few seconds so you notice them. Your choices are remembered on this computer.
+
+**Tips**
+
+- **Clicker and arrow keys:** after clicking in the chat window, click once on your slide before you use your clicker or arrow keys. Otherwise the keys go to the chat, not to PowerPoint.
+- **See-through:** a browser window can't be see-through, so the chat covers the corner of the slide it sits on. Keep it small, or leave a free corner on your slides.
+- **Two screens (laptop + projector):** with Presenter View, drag the chat window onto the projector screen if the class should see it, or keep it on your laptop screen if only you should.
+- Close the chat window to put the chat back on the teacher page. Keep the main ClassChat tab open while you present.
 
 Other browsers (Firefox, Safari) can't keep a window on top. There, the button opens a small separate window you can place beside your slides.
 
