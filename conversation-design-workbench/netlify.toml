@@ -1,0 +1,19 @@
+# Netlify settings. In Netlify, set the site's "Base directory" to
+# conversation-design-workbench (see DEPLOY.md).
+
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+  command = "npm test"
+
+[functions]
+  node_bundler = "esbuild"
+  # Kept as normal packages rather than bundled (they include large worker files).
+  external_node_modules = ["unpdf", "mammoth", "pg"]
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"
+    X-Frame-Options = "DENY"

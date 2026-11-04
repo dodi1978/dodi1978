@@ -1,0 +1,24 @@
+{
+  "name": "conversation-design-workbench",
+  "version": "0.1.0",
+  "description": "Conversation Design Workbench: build a RAG chatbot, create interactions and test evals",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
+    "mammoth": "^1.13.0",
+    "pg": "^8.23.1",
+    "unpdf": "^1.9.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.14"
+  }
+}
