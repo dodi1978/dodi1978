@@ -38,7 +38,9 @@ async function readBody(req) {
 
 async function serveStatic(req, res) {
   const pathname = decodeURIComponent(new URL(req.url, "http://x").pathname);
-  const file = path.normalize(path.join(PUBLIC, pathname === "/" ? "index.html" : pathname));
+  // The public chat page for real users lives at /c/<link code>.
+  const page = pathname === "/" ? "index.html" : pathname.startsWith("/c/") ? "chat.html" : pathname;
+  const file = path.normalize(path.join(PUBLIC, page));
   if (!file.startsWith(PUBLIC)) {
     res.writeHead(403).end();
     return;

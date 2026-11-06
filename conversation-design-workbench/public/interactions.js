@@ -10,6 +10,7 @@ const OUTCOME_LABELS = {
   asked_for_human: ["asked for a human", "warn"],
   max_turns: ["hit the turn limit", ""],
   other: ["ended", ""],
+  finished: ["ended by user", "ok"],
 };
 
 function kindLabel(c) {
@@ -17,10 +18,12 @@ function kindLabel(c) {
   if (kind === "single_question") return "test question";
   if (kind === "written") return "written";
   if (kind === "live") return "live test chat";
+  if (kind === "real") return "real user";
   return SOURCE_LABELS[c.source] ?? c.source;
 }
 
 function statusBadge(meta = {}) {
+  if (meta.kind === "real" && !meta.endedAt) return h("span", { class: "badge", title: "The participant did not press End chat." }, "not ended");
   if (meta.status === "pending") return h("span", { class: "badge" }, "not run yet");
   if (meta.status === "running") return h("span", { class: "badge accent" }, "in progress");
   if (meta.status === "failed") return h("span", { class: "badge danger", title: meta.error || "" }, "failed");
@@ -766,17 +769,14 @@ function importPanel(ctx) {
 
 // ---------- interactions page ----------
 
-export async function interactionsTab(body, projectId, _overview, extra = []) {
-  if (extra[0]) return conversationDetail(body, projectId, extra[0]);
-  const params = new URLSearchParams(location.hash.split("?")[1] || "");
-  const query = new URLSearchParams([...params].filter(([, v]) => v));
-  const [{ conversations }, { runs }, { personas }, { versions }] = await Promise.all([
-    api("GET", `/api/projects/${projectId}/conversations?${query}`),
+// The "Simulated interactions" tab: the four ways of creating interactions, and their runs.
+export async function createTab(body, projectId) {
+  const [{ runs }, { personas }, { versions }] = await Promise.all([
     api("GET", `/api/projects/${projectId}/runs`),
     api("GET", `/api/projects/${projectId}/personas`),
     api("GET", `/api/projects/${projectId}/bot`),
   ]);
-  const refresh = () => interactionsTab(body, projectId, _overview, extra).catch(fail);
+  const refresh = () => createTab(body, projectId).catch(fail);
   const area = h("div");
   const ctx = { projectId, versions, personas, refresh, area };
 
@@ -792,7 +792,9 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
     fill(panelHolder, makers[key][1](ctx));
   };
   const makerButtons = Object.entries(makers).map(([key, [name]]) => h("button", { type: "button", "data-key": key, onclick: () => showMaker(key) }, name));
-  const createCard = h("div", { class: "card" }, h("h2", {}, "Create interactions"), h("div", { class: "segmented wrap", role: "group", "aria-label": "How to create" }, makerButtons), panelHolder);
+  const createCard = h("div", { class: "card" }, h("h2", {}, "Create interactions"),
+    h("p", { class: "muted" }, "Everything created here is collected under Interactions, together with test chats and conversations with real users."),
+    h("div", { class: "segmented wrap", role: "group", "aria-label": "How to create" }, makerButtons), panelHolder);
   showMaker(current);
 
   // Runs
@@ -812,9 +814,26 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
           fail(err);
         }
       } }, "Delete")))));
-  const runsCard = runs.length ? h("div", { class: "card" }, h("h2", {}, "Runs and imports"), h("div", { class: "table-wrap" }, h("table", {},
-    h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Kind"), h("th", {}, "Progress"), h("th", {}, "Started"), h("th", {}, ""))),
-    h("tbody", {}, runRows)))) : null;
+  const runsCard = runs.length ? h("div", { class: "card" }, h("h2", {}, "Runs and imports"),
+    h("p", { class: "small muted" }, "Click a run to see its conversations under Interactions."),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Kind"), h("th", {}, "Progress"), h("th", {}, "Started"), h("th", {}, ""))),
+      h("tbody", {}, runRows)))) : null;
+
+  fill(body, createCard, area, runsCard);
+}
+
+// The "Interactions" tab: everything collected, from every source, with filters.
+export async function interactionsTab(body, projectId, _overview, extra = []) {
+  if (extra[0]) return conversationDetail(body, projectId, extra[0]);
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  const query = new URLSearchParams([...params].filter(([, v]) => v));
+  const [{ conversations }, { runs }, { personas }, { versions }] = await Promise.all([
+    api("GET", `/api/projects/${projectId}/conversations?${query}`),
+    api("GET", `/api/projects/${projectId}/runs`),
+    api("GET", `/api/projects/${projectId}/personas`),
+    api("GET", `/api/projects/${projectId}/bot`),
+  ]);
 
   // Filters and list
   const setFilter = (key, value) => {
@@ -826,7 +845,7 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
   const filterSelect = (key, label, options) => h("div", { class: "field" }, h("label", { for: `f-${key}` }, label),
     h("select", { id: `f-${key}`, onchange: (e) => setFilter(key, e.target.value) }, h("option", { value: "" }, "All"), options.map(([v, l]) => h("option", { value: v, selected: params.get(key) === v }, l))));
   const filters = h("div", { class: "grid-4 filters" },
-    filterSelect("source", "Source", [["simulated", "simulated"], ["hand-written", "hand-written"], ["imported", "imported"]]),
+    filterSelect("source", "Source", [["real", "real users"], ["simulated", "simulated"], ["hand-written", "hand-written"], ["imported", "imported"]]),
     filterSelect("personaId", "Persona", personas.map((p) => [p.id, p.name])),
     filterSelect("versionId", "Bot version", versions.map((v) => [v.id, `v${v.versionNo}${v.label ? ` – ${v.label}` : ""}`])),
     filterSelect("runId", "Run", runs.map((r) => [r.id, r.label])),
@@ -848,9 +867,9 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
       ? h("div", { class: "table-wrap" }, h("table", {},
           h("thead", {}, h("tr", {}, h("th", {}, "Title"), h("th", {}, "Source"), h("th", {}, "Persona"), h("th", {}, "Bot"), h("th", {}, "Messages"), h("th", {}, "Scenario"), h("th", {}, "Outcome"), h("th", {}, "Rating"), h("th", {}, "Created"))),
           h("tbody", {}, rows)))
-      : h("p", { class: "empty" }, query.toString() ? "No interactions match these filters." : "No interactions yet. Create some above."));
+      : h("p", { class: "empty" }, query.toString() ? "No interactions match these filters." : "No interactions yet. Create some under Simulated interactions, chat in Test chat, or share the chat link with real users."));
 
-  fill(body, createCard, area, runsCard, listCard);
+  fill(body, listCard);
 }
 
 function sessionStorageGet(key) {
@@ -897,6 +916,11 @@ async function conversationDetail(body, projectId, conversationId) {
     : null;
   if (meta.plan) fact("Scenario (planned)", scenarioText(meta.plan));
   fact("Note", meta.note);
+  if (meta.kind === "real") {
+    fact("Consent", meta.consentAt ? `given ${when(meta.consentAt)}` : "no consent screen");
+    fact("Ended", meta.endedAt ? when(meta.endedAt) : "not ended (the participant left without pressing End chat)");
+    if (meta.ratingSkipped) fact("Satisfaction (CSAT)", "skipped by the participant");
+  }
   if (meta.error) fact("Last error", h("span", { class: "badge danger" }, meta.error));
 
   const transcript = messages.map((m) => {

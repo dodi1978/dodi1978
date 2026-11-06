@@ -28,6 +28,21 @@ A web app for conversation designers and researchers: build a RAG chatbot over y
 - **Import**: CSV or Excel (one row per message: conversation, speaker, text) or pasted "User: / Bot:" transcripts, with a preview before importing.
 - **Interactions**: every conversation in one list, filterable by source, persona, bot version and run, with a detail page showing the goal, outcome, rating, planned behaviour and the persona as it was used.
 
+## Menu
+
+| Tab | What is in it |
+|---|---|
+| Overview | Project details, counts, API cost, recent activity |
+| Chatbot design | **RAG** (documents, indexing, try the search) and **System settings** (instructions, model, versions) |
+| Test chat | Chat with the bot yourself, and **Share with real users** (the public chat link) |
+| Personas | Personas, the rapport framework, and adding personas (brief, spreadsheet, research text) |
+| Simulated interactions | Simulate conversations, test questions, write a conversation, import transcripts, and runs |
+| Interactions | Everything collected, from every source, with filters and a page per conversation |
+
+## Real users (public chat link)
+
+Under Test chat → Share with real users, a project gets a link (`/c/<code>`) that participants open without the passphrase. They see an information text and, optionally, a consent statement to agree to; then they chat with the chosen bot version, and can end the chat or press "Talk to a person" (recorded as an escalation). At the end they can give a 1–5 satisfaction rating with a comment. Conversations are saved as source `real`, with consent time, how the chat ended and the rating; chats closed without ending are shown as "not ended". Participants never see passages or settings. Limits per link: chats per 24 hours and messages per chat. The link can be switched off or replaced (the old one then stops working).
+
 ## Configuration (environment variables)
 
 | Variable | Required | Purpose |

@@ -264,3 +264,12 @@ dialog.wide { width: min(900px, calc(100vw - 32px)); }
 @media (max-width: 800px) {
   .rapport-row { grid-template-columns: 1fr; }
 }
+
+/* Sub-navigation (Chatbot design) and sharing */
+.subtabs { display: flex; gap: 0.4rem; margin: -0.4rem 0 1rem; flex-wrap: wrap; }
+.subtabs a { padding: 0.35rem 0.9rem; border-radius: 999px; text-decoration: none; color: var(--muted); border: 1px solid var(--border); background: var(--surface); }
+.subtabs a.active { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 600; }
+.share-card > summary { cursor: pointer; }
+.share-link { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+.share-link input { flex: 1; min-width: 220px; font-family: var(--mono); font-size: 0.85rem; }
+.tabs { flex-wrap: nowrap; }

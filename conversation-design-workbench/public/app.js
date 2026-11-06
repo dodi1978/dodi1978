@@ -1,7 +1,7 @@
 // Conversation Design Workbench: browser side. Plain JavaScript, no build step.
 
 import { state, h, api, toast, fail, when, money, plural, setCrumbs, fill, render, busy, confirmDialog, showDialog, passageView, messageView } from "./ui.js";
-import { personasTab, interactionsTab } from "./interactions.js";
+import { personasTab, interactionsTab, createTab } from "./interactions.js";
 
 const app = document.getElementById("app");
 const logoutButton = document.getElementById("logout");
@@ -60,7 +60,7 @@ async function projectsPage() {
     const done = busy(create, "Creating…");
     try {
       const { project } = await api("POST", "/api/projects", { name: name.value, description: description.value });
-      location.hash = `#/p/${project.id}/documents`;
+      location.hash = `#/p/${project.id}/design/rag`;
     } catch (err) {
       fail(err);
     } finally {
@@ -116,14 +116,21 @@ async function projectsPage() {
 
 const TABS = [
   ["overview", "Overview"],
-  ["documents", "Documents"],
-  ["bot", "Chatbot"],
+  ["design", "Chatbot design"],
   ["chat", "Test chat"],
   ["personas", "Personas"],
+  ["simulate", "Simulated interactions"],
   ["interactions", "Interactions"],
 ];
 
+// Addresses from before the menu was reorganised still work.
+const MOVED = { documents: "design/rag", bot: "design/settings" };
+
 async function projectPage(projectId, tab, extra) {
+  if (MOVED[tab]) {
+    location.replace(`#/p/${projectId}/${MOVED[tab]}`);
+    return;
+  }
   const data = await api("GET", `/api/projects/${projectId}`);
   const { project } = data;
   setCrumbs({ href: "#/", label: "Projects" }, { href: `#/p/${projectId}`, label: project.name }, TABS.find(([k]) => k === tab)?.[1] ?? "");
@@ -131,8 +138,22 @@ async function projectPage(projectId, tab, extra) {
     TABS.map(([key, label]) => h("a", { href: `#/p/${projectId}/${key}`, class: key === tab ? "active" : "", "aria-current": key === tab ? "page" : null }, label)));
   const body = h("div");
   render(h("h1", {}, project.name), tabs, body);
-  const pages = { overview: overviewTab, documents: documentsTab, bot: botTab, chat: chatTab, personas: personasTab, interactions: interactionsTab };
+  const pages = { overview: overviewTab, design: designTab, chat: chatTab, personas: personasTab, simulate: createTab, interactions: interactionsTab };
   await (pages[tab] ?? overviewTab)(body, projectId, data, extra);
+}
+
+// "Chatbot design": the knowledge base (RAG) and the bot's system settings.
+const DESIGN_PARTS = [["rag", "RAG"], ["settings", "System settings"]];
+
+async function designTab(body, projectId, data, extra = []) {
+  const part = DESIGN_PARTS.some(([k]) => k === extra[0]) ? extra[0] : "rag";
+  const inner = h("div");
+  fill(body,
+    h("nav", { class: "subtabs", "aria-label": "Chatbot design sections" },
+      DESIGN_PARTS.map(([key, label]) => h("a", { href: `#/p/${projectId}/design/${key}`, class: key === part ? "active" : "", "aria-current": key === part ? "page" : null }, label))),
+    inner);
+  if (part === "settings") await botTab(inner, projectId, data);
+  else await documentsTab(inner, projectId, data);
 }
 
 function setupNotices() {
@@ -423,7 +444,7 @@ async function botTab(body, projectId) {
       done();
     }
   } },
-    h("div", { class: "row" }, h("h2", { style: "margin:0" }, "Chatbot design"), h("span", { class: "spacer" }), unsaved),
+    h("div", { class: "row" }, h("h2", { style: "margin:0" }, "System settings"), h("span", { class: "spacer" }), unsaved),
     h("p", { class: "muted" }, "Conversations always record which saved version answered, so you can compare versions on the same inputs later."),
     h("div", { class: "field" }, h("label", { for: "b-prompt" }, "System instructions"), fields.systemPrompt,
       h("div", { class: "hint" }, "Role, tone, scope, persona and rules. This is also the design specification for the instruction-following eval later.")),
@@ -505,7 +526,9 @@ async function chatTab(body, projectId, _overview, extra = []) {
   );
 
   const pane = h("div", { class: "card chat-pane" });
-  fill(body, ...setupNotices(), h("div", { class: "chat-layout" }, list, pane));
+  const shareHolder = h("div");
+  fill(body, ...setupNotices(), shareHolder, h("div", { class: "chat-layout" }, list, pane));
+  shareCard(shareHolder, projectId, versions).catch(fail);
 
   const selected = convParam || conversations[0]?.id;
   if (!selected) {
@@ -622,3 +645,89 @@ async function route() {
 
 window.addEventListener("hashchange", route);
 route();
+
+// ---------- sharing the chat with real users ----------
+
+async function shareCard(holder, projectId, versions) {
+  const { share, defaults, conversationsLast24h } = await api("GET", `/api/projects/${projectId}/share`);
+  const s = share ?? { ...defaults, token: null };
+  const link = s.token ? `${location.origin}/c/${s.token}` : "";
+  const f = {
+    enabled: h("input", { type: "checkbox", id: "sh-enabled", checked: s.enabled, style: "width:auto" }),
+    version: h("select", { id: "sh-version" }, h("option", { value: "" }, "Always the newest version"), versions.map((v) => h("option", { value: v.id, selected: v.id === s.botVersionId }, `v${v.versionNo}${v.label ? ` – ${v.label}` : ""}`))),
+    title: h("input", { id: "sh-title", value: s.title, maxlength: 120 }),
+    welcome: h("textarea", { id: "sh-welcome", rows: 4 }, s.welcome),
+    requireConsent: h("input", { type: "checkbox", id: "sh-consent", checked: s.requireConsent, style: "width:auto" }),
+    consentText: h("textarea", { id: "sh-consent-text", rows: 2 }, s.consentText),
+    askRating: h("input", { type: "checkbox", id: "sh-rating", checked: s.askRating, style: "width:auto" }),
+    offerHuman: h("input", { type: "checkbox", id: "sh-human", checked: s.offerHuman, style: "width:auto" }),
+    humanMessage: h("textarea", { id: "sh-human-msg", rows: 2 }, s.humanMessage),
+    dailyLimit: h("input", { id: "sh-daily", type: "number", min: 1, max: 1000, value: s.dailyLimit }),
+    maxMessages: h("input", { id: "sh-max", type: "number", min: 1, max: 100, value: s.maxMessages }),
+  };
+  const save = h("button", { class: "primary", type: "submit" }, "Save");
+  const reload = () => shareCard(holder, projectId, versions).catch(fail);
+  const status = s.enabled && s.token
+    ? h("span", { class: "badge ok" }, "link is live")
+    : h("span", { class: "badge" }, "off");
+  const linkRow = link ? h("div", { class: "share-link" },
+    h("input", { id: "sh-link", value: link, readonly: true, "aria-label": "Chat link", onclick: (e) => e.target.select() }),
+    h("button", { type: "button", onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(link);
+        toast("Link copied.");
+      } catch {
+        document.getElementById("sh-link").select();
+        toast("Select the link and copy it.");
+      }
+    } }, "Copy"),
+    s.enabled ? h("a", { class: "button", href: link, target: "_blank", rel: "noopener" }, "Open") : null,
+    h("button", { type: "button", class: "link-button", onclick: async () => {
+      if (!(await confirmDialog("Make a new link? The current link stops working straight away.", "New link"))) return;
+      try {
+        await api("POST", `/api/projects/${projectId}/share/new-link`);
+        toast("New link made.");
+        reload();
+      } catch (err) {
+        fail(err);
+      }
+    } }, "Make a new link")) : null;
+  const check = (input, label, hint) => h("div", { class: "field" }, h("label", { class: "check", for: input.id }, input, ` ${label}`), hint ? h("div", { class: "hint" }, hint) : null);
+  fill(holder, h("details", { class: "card share-card", open: !share || undefined },
+    h("summary", {}, h("strong", {}, "Share with real users"), " ", status,
+      h("span", { class: "small muted" }, ` · ${plural(conversationsLast24h, "real-user chat")} in the last 24 hours`)),
+    h("form", { onsubmit: async (e) => {
+      e.preventDefault();
+      const done = busy(save, "Saving…");
+      try {
+        await api("PUT", `/api/projects/${projectId}/share`, { share: {
+          enabled: f.enabled.checked, botVersionId: f.version.value || null, title: f.title.value, welcome: f.welcome.value,
+          requireConsent: f.requireConsent.checked, consentText: f.consentText.value, askRating: f.askRating.checked,
+          offerHuman: f.offerHuman.checked, humanMessage: f.humanMessage.value,
+          dailyLimit: Number(f.dailyLimit.value), maxMessages: Number(f.maxMessages.value),
+        } });
+        toast("Saved.");
+        reload();
+      } catch (err) {
+        fail(err);
+        done();
+      }
+    } },
+      h("p", { class: "muted", style: "margin-top:0.8rem" }, "Give participants a link to chat with your bot. They do not need the passphrase and only see the chat. Their conversations are saved under Interactions as “real user”, with the bot version, their consent, how the chat ended and their satisfaction rating. No names or contact details are asked for."),
+      linkRow,
+      check(f.enabled, "Link is switched on", "Switch it off at any time; the link then shows “not available”."),
+      h("div", { class: "grid-2" },
+        h("div", { class: "field" }, h("label", { for: "sh-version" }, "Bot version participants talk to"), f.version),
+        h("div", { class: "field" }, h("label", { for: "sh-title" }, "Title shown to participants"), f.title)),
+      h("div", { class: "field" }, h("label", { for: "sh-welcome" }, "Information shown before the chat"), f.welcome,
+        h("div", { class: "hint" }, "For example what the study is about, how data is used, and who to contact. Check it against your ethics approval.")),
+      check(f.requireConsent, "Ask participants to agree before they start"),
+      h("div", { class: "field" }, h("label", { for: "sh-consent-text" }, "Consent statement"), f.consentText),
+      check(f.askRating, "Ask for a satisfaction rating (1–5) at the end"),
+      check(f.offerHuman, "Show a “Talk to a person” button", "Pressing it ends the chat and records an escalation."),
+      h("div", { class: "field" }, h("label", { for: "sh-human-msg" }, "Message shown after “Talk to a person”"), f.humanMessage),
+      h("div", { class: "grid-2" },
+        h("div", { class: "field" }, h("label", { for: "sh-daily" }, "Most chats per 24 hours"), f.dailyLimit, h("div", { class: "hint" }, "Protects your API credit if the link spreads.")),
+        h("div", { class: "field" }, h("label", { for: "sh-max" }, "Most messages per chat"), f.maxMessages)),
+      save)));
+}

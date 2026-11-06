@@ -2,7 +2,7 @@
 // Netlify (netlify/functions/api.mjs) and the plain Node server (server.js) both
 // wrap this, so moving between hosts does not touch the app itself.
 
-import { randomUUID, createHmac, timingSafeEqual } from "node:crypto";
+import { randomUUID, randomBytes, createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { extractFromFile, extractFromUrl, chunkText, normalise, DocumentError } from "./documents.js";
 import { toPgVector } from "./embeddings.js";
 import { claudeCost, voyageCost, MODELS, EFFORTS, modelInfo } from "./pricing.js";
@@ -93,6 +93,9 @@ function routes() {
     ["PATCH", "/api/personas/:id", updatePersona],
     ["DELETE", "/api/personas/:id", deletePersona],
     ["POST", "/api/personas/:id/duplicate", duplicatePersona],
+    ["GET", "/api/projects/:id/share", getShare],
+    ["PUT", "/api/projects/:id/share", saveShare],
+    ["POST", "/api/projects/:id/share/new-link", newShareLink],
     ["GET", "/api/projects/:id/framework", getFramework],
     ["PUT", "/api/projects/:id/framework", saveFramework],
     ["POST", "/api/projects/:id/personas/import", importPersonas],
@@ -142,6 +145,11 @@ export function createApp({ db, claude, embedder, passphrase, fetchImpl = fetch,
         if (url.pathname === "/api/login" && request.method === "POST") return await login(request);
         if (url.pathname === "/api/logout" && request.method === "POST") return logout();
         if (!url.pathname.startsWith("/api/")) throw new HttpError(404, "Not found.");
+        // The public chat for real users: no passphrase, only what a participant needs.
+        if (url.pathname.startsWith("/api/public/")) {
+          if (!ctx.db) throw new HttpError(503, "This chat is not available right now.");
+          return json(await publicRoute(ctx, request, url));
+        }
         if (!authorised(request)) throw new HttpError(401, passphrase ? "Please enter the passphrase." : "No passphrase is set. Add WORKBENCH_PASSPHRASE to the site's environment variables.");
         if (!ctx.db) throw new HttpError(503, "No database is connected. See the setup guide (DEPLOY.md).");
         for (const route of table) {
@@ -429,7 +437,9 @@ function conversationOut(c) {
   return {
     id: c.id, projectId: c.project_id, botVersionId: c.bot_version_id, versionNo: c.version_no ?? null, source: c.source,
     title: c.title, personaId: c.persona_id ?? null, runId: c.run_id ?? null, runLabel: c.run_label ?? null,
-    meta: c.meta, messageCount: c.message_count ?? undefined, createdAt: c.created_at, updatedAt: c.updated_at,
+    // keyHash is the participant's secret for a real-user chat: never sent anywhere.
+    meta: c.meta ? (({ keyHash, ...rest }) => rest)(c.meta) : c.meta,
+    messageCount: c.message_count ?? undefined, createdAt: c.created_at, updatedAt: c.updated_at,
   };
 }
 
@@ -541,7 +551,7 @@ async function exchange(ctx, conv, userText, userMeta = {}) {
     messages: buildMessages(history, userText, retrieval.passages),
   });
   const latencyMs = Date.now() - started;
-  const cost = await logClaude(db, conv.project_id, reply, conv.source === "hand-written" ? "chat" : "chat (generated interactions)");
+  const cost = await logClaude(db, conv.project_id, reply, conv.source === "hand-written" ? "chat" : conv.source === "real" ? "chat (real users)" : "chat (generated interactions)");
 
   const userMessage = await insertMessage(db, conv.id, history.length, "user", userText, userMeta);
   const botText = reply.refused ? "[The model declined to answer this message.]" : reply.text || "[Empty reply]";
@@ -1031,4 +1041,156 @@ async function researchDraft({ db, claude }, { id }, body) {
   const source = `Drafted by AI from ${String(body.sourceLabel || "research material").slice(0, 200)}: check against the data`;
   const persona = await insertPersona(db, id, { ...result.persona, source }, framework);
   return { persona, droppedQuotes: result.droppedQuotes };
+}
+
+// ---------- public chat link for real users ----------
+
+const SHARE_DEFAULTS = {
+  enabled: false,
+  botVersionId: null,
+  title: "Chat with our assistant",
+  welcome: "This is a research study about chatbots. Your conversation is saved anonymously for analysis. Please do not share personal details such as your name, address or phone number.",
+  requireConsent: true,
+  consentText: "I have read the information above and agree that this conversation is saved and used for research.",
+  askRating: true,
+  offerHuman: true,
+  humanMessage: "Thank you. In a real service you would now be passed to a member of staff. For this study, the chat ends here.",
+  dailyLimit: 100,
+  maxMessages: 30,
+};
+
+const newToken = () => randomBytes(16).toString("base64url");
+const hashKey = (key) => createHash("sha256").update(String(key)).digest("hex");
+
+function sanitiseShare(input, current = {}) {
+  const s = { ...SHARE_DEFAULTS, ...current, ...input };
+  return {
+    enabled: Boolean(s.enabled),
+    token: current.token || newToken(),
+    botVersionId: s.botVersionId ? String(s.botVersionId) : null,
+    title: String(s.title ?? "").trim().slice(0, 120) || SHARE_DEFAULTS.title,
+    welcome: String(s.welcome ?? "").slice(0, 3000),
+    requireConsent: Boolean(s.requireConsent),
+    consentText: String(s.consentText ?? "").slice(0, 1000),
+    askRating: Boolean(s.askRating),
+    offerHuman: Boolean(s.offerHuman),
+    humanMessage: String(s.humanMessage ?? "").slice(0, 1000),
+    dailyLimit: Math.min(1000, Math.max(1, Math.round(Number(s.dailyLimit)) || 100)),
+    maxMessages: Math.min(100, Math.max(1, Math.round(Number(s.maxMessages)) || 30)),
+  };
+}
+
+async function shareOut(db, project) {
+  const share = project.share ? sanitiseShare({}, project.share) : null;
+  const [{ today }] = await db.query(
+    "SELECT count(*)::int AS today FROM conversations WHERE project_id = $1 AND source = 'real' AND created_at > now() - interval '24 hours'",
+    [project.id],
+  );
+  return { share, defaults: SHARE_DEFAULTS, conversationsLast24h: today };
+}
+
+async function getShare({ db }, { id }) {
+  return shareOut(db, await loadProject(db, id));
+}
+
+async function saveShare({ db }, { id }, body) {
+  const project = await loadProject(db, id);
+  const share = sanitiseShare(body.share ?? body, project.share ?? {});
+  if (share.botVersionId) await loadVersion(db, id, share.botVersionId);
+  await db.query("UPDATE projects SET share = $2, updated_at = now() WHERE id = $1", [id, JSON.stringify(share)]);
+  return shareOut(db, await loadProject(db, id));
+}
+
+// A new link: the old one stops working at once.
+async function newShareLink({ db }, { id }) {
+  const project = await loadProject(db, id);
+  const share = { ...sanitiseShare({}, project.share ?? {}), token: newToken() };
+  await db.query("UPDATE projects SET share = $2, updated_at = now() WHERE id = $1", [id, JSON.stringify(share)]);
+  return shareOut(db, await loadProject(db, id));
+}
+
+const UNAVAILABLE = "This chat is not available right now.";
+
+async function publicRoute(ctx, request, url) {
+  const parts = url.pathname.split("/").filter(Boolean); // api, public, token, …
+  const token = parts[2] ?? "";
+  if (!/^[A-Za-z0-9_-]{10,40}$/.test(token)) throw new HttpError(404, UNAVAILABLE);
+  const [project] = await ctx.db.query("SELECT * FROM projects WHERE share->>'token' = $1", [token]);
+  if (!project?.share?.enabled) throw new HttpError(404, UNAVAILABLE);
+  const share = sanitiseShare({}, project.share);
+  const body = request.method === "POST" ? await readBody(request) : {};
+
+  if (request.method === "GET" && parts.length === 3) {
+    return {
+      title: share.title, welcome: share.welcome, requireConsent: share.requireConsent, consentText: share.consentText,
+      askRating: share.askRating, offerHuman: share.offerHuman, humanMessage: share.humanMessage, maxMessages: share.maxMessages,
+    };
+  }
+  if (request.method === "POST" && parts[3] === "start" && parts.length === 4) return publicStart(ctx, project, share, body);
+  if (request.method === "POST" && parts[3] === "chat" && parts[5] === "messages" && parts.length === 6) return publicMessage(ctx, project, share, parts[4], body);
+  if (request.method === "POST" && parts[3] === "chat" && parts[5] === "end" && parts.length === 6) return publicEnd(ctx, project, parts[4], body);
+  throw new HttpError(404, "Not found.");
+}
+
+async function publicStart({ db }, project, share, body) {
+  if (share.requireConsent && body.consent !== true) throw new HttpError(400, "Please tick the box to agree before starting.");
+  const [{ today }] = await db.query(
+    "SELECT count(*)::int AS today FROM conversations WHERE project_id = $1 AND source = 'real' AND created_at > now() - interval '24 hours'",
+    [project.id],
+  );
+  if (today >= share.dailyLimit) throw new HttpError(429, "This chat has reached its limit for today. Please try again tomorrow.");
+  let version;
+  try {
+    version = await loadVersion(db, project.id, share.botVersionId);
+  } catch {
+    throw new HttpError(404, UNAVAILABLE);
+  }
+  const key = randomBytes(24).toString("base64url");
+  const convId = randomUUID();
+  const [{ n }] = await db.query("SELECT count(*)::int + 1 AS n FROM conversations WHERE project_id = $1 AND source = 'real'", [project.id]);
+  const meta = { kind: "real", status: "open", keyHash: hashKey(key), ...(share.requireConsent ? { consentAt: new Date().toISOString(), consentText: share.consentText } : {}) };
+  await db.query(
+    "INSERT INTO conversations (id, project_id, bot_version_id, source, title, meta) VALUES ($1, $2, $3, $4, $5, $6)",
+    [convId, project.id, version.id, "real", `Participant ${n}`, JSON.stringify(meta)],
+  );
+  await touch(db, project.id);
+  return { conversationId: convId, key };
+}
+
+async function loadParticipantConversation(db, project, convId, key) {
+  if (!/^[0-9a-f-]{36}$/.test(convId)) throw new HttpError(404, "Not found.");
+  const conv = await loadConversation(db, convId);
+  if (conv.project_id !== project.id || conv.source !== "real" || !conv.meta?.keyHash || !sameText(conv.meta.keyHash, hashKey(key ?? ""))) {
+    throw new HttpError(403, "This conversation cannot be continued here. Please reload the page to start again.");
+  }
+  return conv;
+}
+
+async function publicMessage(ctx, project, share, convId, body) {
+  const conv = await loadParticipantConversation(ctx.db, project, convId, body.key);
+  if (conv.meta.endedAt) throw new HttpError(400, "This chat has ended.");
+  const text = requireText(body.text, "Message", 2000);
+  const [{ sent }] = await ctx.db.query("SELECT count(*)::int AS sent FROM messages WHERE conversation_id = $1 AND role = 'user'", [convId]);
+  if (sent >= share.maxMessages) throw new HttpError(400, "This chat has reached its maximum length. Please end the chat.");
+  const [, reply] = await exchange(ctx, conv, text, { participant: true });
+  return { reply: reply.text, remaining: share.maxMessages - sent - 1 };
+}
+
+// reason: "finished" (End chat) or "human" (Talk to a person). A rating can follow in a second call.
+async function publicEnd({ db }, project, convId, body) {
+  const conv = await loadParticipantConversation(db, project, convId, body.key);
+  const meta = { ...conv.meta };
+  if (!meta.endedAt) {
+    meta.endedAt = new Date().toISOString();
+    meta.status = "done";
+    meta.outcome = body.reason === "human" ? "asked_for_human" : "finished";
+    meta.escalated = body.reason === "human";
+  }
+  const score = Number(body.rating);
+  if (!meta.rating && Number.isInteger(score) && score >= 1 && score <= 5) {
+    meta.rating = { score, comment: String(body.comment ?? "").trim().slice(0, 1000) };
+    delete meta.ratingSkipped;
+  } else if (!meta.rating && body.skipRating) meta.ratingSkipped = true;
+  await saveMeta(db, convId, meta);
+  return { ok: true };
 }
