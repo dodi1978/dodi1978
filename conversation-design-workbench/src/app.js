@@ -459,6 +459,7 @@ async function listConversations({ db }, { id }, _body, url) {
   if (q.get("versionId")) add("c.bot_version_id = ?", q.get("versionId"));
   if (q.get("scenario")) add("COALESCE(c.meta->'plan'->>'scenario', '') = ?", q.get("scenario"));
   if (q.get("kind") === "live") where.push("c.source = 'hand-written' AND COALESCE(c.meta->>'kind', 'live') = 'live'");
+  else if (q.get("kind")) add("COALESCE(c.meta->>'kind', CASE c.source WHEN 'hand-written' THEN 'live' ELSE c.source END) = ?", q.get("kind"));
   const rows = await db.query(
     `SELECT c.*, v.version_no, r.label AS run_label, (SELECT count(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count
        FROM conversations c LEFT JOIN bot_versions v ON v.id = c.bot_version_id LEFT JOIN runs r ON r.id = c.run_id

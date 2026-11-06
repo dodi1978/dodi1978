@@ -70,8 +70,11 @@ test("a shared link lets real users chat, and their chats are collected", async 
   assert.equal(conv.meta.keyHash, undefined, "the participant's secret is not shown in the workbench");
   assert.equal(conv.messageCount, 4);
 
+  await call("POST", `/api/projects/${projectId}/conversations`, {});
+  const byType = async (kind) => (await call("GET", `/api/projects/${projectId}/conversations?kind=${kind}`)).data.conversations.length;
+  assert.deepEqual([await byType("real"), await byType("live"), await byType("simulated")], [1, 1, 0], "interactions can be filtered by type");
   const live = await call("GET", `/api/projects/${projectId}/conversations?kind=live`);
-  assert.equal(live.data.conversations.length, 0, "real-user chats are not mixed into Test chat");
+  assert.equal(live.data.conversations.length, 1, "real-user chats are not mixed into Test chat");
   const overview = await call("GET", `/api/projects/${projectId}`);
   assert.ok(overview.data.usage.rows.some((r) => r.kind === "chat (real users)"));
 });

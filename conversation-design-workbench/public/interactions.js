@@ -13,13 +13,26 @@ const OUTCOME_LABELS = {
   finished: ["ended by user", "ok"],
 };
 
+// Every interaction has one type. Real users are set apart from everything created in the workbench.
+const TYPES = [
+  ["real", "Real users", "real user"],
+  ["simulated", "Simulated", "simulated"],
+  ["single_question", "Test questions", "test question"],
+  ["live", "Test chats", "test chat"],
+  ["written", "Written", "written"],
+  ["imported", "Imported", "imported"],
+];
+
+function kindOf(c) {
+  return c.meta?.kind ?? (c.source === "hand-written" ? "live" : c.source);
+}
+
 function kindLabel(c) {
-  const kind = c.meta?.kind;
-  if (kind === "single_question") return "test question";
-  if (kind === "written") return "written";
-  if (kind === "live") return "live test chat";
-  if (kind === "real") return "real user";
-  return SOURCE_LABELS[c.source] ?? c.source;
+  return TYPES.find(([k]) => k === kindOf(c))?.[2] ?? SOURCE_LABELS[c.source] ?? c.source;
+}
+
+function kindBadge(c) {
+  return h("span", { class: `badge kind kind-${kindOf(c)}` }, kindLabel(c));
 }
 
 function statusBadge(meta = {}) {
@@ -792,8 +805,8 @@ export async function createTab(body, projectId) {
     fill(panelHolder, makers[key][1](ctx));
   };
   const makerButtons = Object.entries(makers).map(([key, [name]]) => h("button", { type: "button", "data-key": key, onclick: () => showMaker(key) }, name));
-  const createCard = h("div", { class: "card" }, h("h2", {}, "Create interactions"),
-    h("p", { class: "muted" }, "Everything created here is collected under Interactions, together with test chats and conversations with real users."),
+  const createCard = h("div", { class: "card" },
+    h("p", { class: "muted", style: "margin-top:0" }, "Choose how to create interactions. Everything created here is collected under Interactions, together with test chats and conversations with real users."),
     h("div", { class: "segmented wrap", role: "group", "aria-label": "How to create" }, makerButtons), panelHolder);
   showMaker(current);
 
@@ -828,12 +841,14 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
   if (extra[0]) return conversationDetail(body, projectId, extra[0]);
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
   const query = new URLSearchParams([...params].filter(([, v]) => v));
-  const [{ conversations }, { runs }, { personas }, { versions }] = await Promise.all([
+  const [{ conversations }, all, { runs }, { personas }, { versions }] = await Promise.all([
     api("GET", `/api/projects/${projectId}/conversations?${query}`),
+    query.toString() ? api("GET", `/api/projects/${projectId}/conversations`) : null,
     api("GET", `/api/projects/${projectId}/runs`),
     api("GET", `/api/projects/${projectId}/personas`),
     api("GET", `/api/projects/${projectId}/bot`),
   ]);
+  const everything = all?.conversations ?? conversations;
 
   // Filters and list
   const setFilter = (key, value) => {
@@ -845,14 +860,14 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
   const filterSelect = (key, label, options) => h("div", { class: "field" }, h("label", { for: `f-${key}` }, label),
     h("select", { id: `f-${key}`, onchange: (e) => setFilter(key, e.target.value) }, h("option", { value: "" }, "All"), options.map(([v, l]) => h("option", { value: v, selected: params.get(key) === v }, l))));
   const filters = h("div", { class: "grid-4 filters" },
-    filterSelect("source", "Source", [["real", "real users"], ["simulated", "simulated"], ["hand-written", "hand-written"], ["imported", "imported"]]),
+    filterSelect("kind", "Type", TYPES.map(([k, l]) => [k, l])),
     filterSelect("personaId", "Persona", personas.map((p) => [p.id, p.name])),
     filterSelect("versionId", "Bot version", versions.map((v) => [v.id, `v${v.versionNo}${v.label ? ` – ${v.label}` : ""}`])),
     filterSelect("runId", "Run", runs.map((r) => [r.id, r.label])),
     filterSelect("scenario", "Scenario", Object.entries(SCENARIO_LABELS)));
   const rows = conversations.map((c) => h("tr", { class: "clickable", onclick: () => (location.hash = `#/p/${projectId}/interactions/${c.id}`) },
     h("td", {}, h("a", { href: `#/p/${projectId}/interactions/${c.id}`, onclick: (e) => e.stopPropagation() }, c.title || "(untitled)")),
-    h("td", {}, h("span", { class: "badge" }, kindLabel(c))),
+    h("td", {}, kindBadge(c)),
     h("td", { class: "small" }, c.meta?.personaName ?? ""),
     h("td", { class: "small" }, c.versionNo ? `v${c.versionNo}` : ""),
     h("td", { class: "small" }, c.messageCount),
@@ -860,14 +875,29 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
     h("td", {}, statusBadge(c.meta)),
     h("td", { class: "small" }, c.meta?.rating ? `${c.meta.rating.score}/5` : ""),
     h("td", { class: "small" }, when(c.createdAt))));
+  // Counts per type, which double as a quick filter.
+  const counts = Object.fromEntries(TYPES.map(([k]) => [k, everything.filter((c) => kindOf(c) === k).length]));
+  const created = everything.length - counts.real;
+  const chip = (key, label, n, extraClass = "") => h("button", {
+    type: "button", class: `type-chip ${extraClass} ${(params.get("kind") || "") === key ? "active" : ""}`, "aria-pressed": String((params.get("kind") || "") === key),
+    onclick: () => setFilter("kind", key),
+  }, label, h("span", { class: "count" }, n));
+  const summary = h("div", { class: "type-summary" },
+    chip("", "All", everything.length),
+    h("span", { class: "type-group" }, chip("real", "Real users", counts.real, "kind-real")),
+    h("span", { class: "type-group created" },
+      h("span", { class: "group-label" }, `Created in the workbench (${created})`),
+      TYPES.slice(1).map(([k, l]) => chip(k, l, counts[k], `kind-${k}`))));
+
   const listCard = h("div", { class: "card" },
     h("div", { class: "row" }, h("h2", { style: "margin:0" }, `Interactions (${conversations.length})`), h("span", { class: "spacer" }), query.toString() ? h("a", { href: `#/p/${projectId}/interactions` }, "Clear filters") : null),
+    summary,
     filters,
     conversations.length
       ? h("div", { class: "table-wrap" }, h("table", {},
-          h("thead", {}, h("tr", {}, h("th", {}, "Title"), h("th", {}, "Source"), h("th", {}, "Persona"), h("th", {}, "Bot"), h("th", {}, "Messages"), h("th", {}, "Scenario"), h("th", {}, "Outcome"), h("th", {}, "Rating"), h("th", {}, "Created"))),
+          h("thead", {}, h("tr", {}, h("th", {}, "Title"), h("th", {}, "Type"), h("th", {}, "Persona"), h("th", {}, "Bot"), h("th", {}, "Messages"), h("th", {}, "Scenario"), h("th", {}, "Outcome"), h("th", {}, "Rating"), h("th", {}, "Created"))),
           h("tbody", {}, rows)))
-      : h("p", { class: "empty" }, query.toString() ? "No interactions match these filters." : "No interactions yet. Create some under Simulated interactions, chat in Test chat, or share the chat link with real users."));
+      : h("p", { class: "empty" }, query.toString() ? "No interactions match these filters." : "No interactions yet. Create some under Create interactions, chat in Test chat, or share the chat link with real users."));
 
   fill(body, listCard);
 }
@@ -892,7 +922,7 @@ async function conversationDetail(body, projectId, conversationId) {
   const meta = c.meta ?? {};
   const facts = [];
   const fact = (label, value) => value !== undefined && value !== null && value !== "" && facts.push(h("div", { class: "fact" }, h("div", { class: "label" }, label), h("div", {}, value)));
-  fact("Source", kindLabel(c));
+  fact("Type", kindBadge(c));
   fact("Persona", meta.personaName);
   fact("Bot version", c.versionNo ? `v${c.versionNo}${settings?.model ? ` · ${settings.model}` : ""}` : null);
   fact("Run", c.runLabel);

@@ -119,12 +119,12 @@ const TABS = [
   ["design", "Chatbot design"],
   ["chat", "Test chat"],
   ["personas", "Personas"],
-  ["simulate", "Simulated interactions"],
+  ["create", "Create interactions"],
   ["interactions", "Interactions"],
 ];
 
 // Addresses from before the menu was reorganised still work.
-const MOVED = { documents: "design/rag", bot: "design/settings" };
+const MOVED = { documents: "design/rag", bot: "design/settings", simulate: "create" };
 
 async function projectPage(projectId, tab, extra) {
   if (MOVED[tab]) {
@@ -138,7 +138,7 @@ async function projectPage(projectId, tab, extra) {
     TABS.map(([key, label]) => h("a", { href: `#/p/${projectId}/${key}`, class: key === tab ? "active" : "", "aria-current": key === tab ? "page" : null }, label)));
   const body = h("div");
   render(h("h1", {}, project.name), tabs, body);
-  const pages = { overview: overviewTab, design: designTab, chat: chatTab, personas: personasTab, simulate: createTab, interactions: interactionsTab };
+  const pages = { overview: overviewTab, design: designTab, chat: chatTab, personas: personasTab, create: createTab, interactions: interactionsTab };
   await (pages[tab] ?? overviewTab)(body, projectId, data, extra);
 }
 
