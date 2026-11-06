@@ -28,8 +28,28 @@ function statusBadge(meta = {}) {
   return label ? h("span", { class: `badge ${kind}` }, label) : null;
 }
 
-function behaviourLine(b = {}) {
-  return `gives up ${b.giveUpPct ?? 0}% · asks for a human ${b.askHumanPct ?? 0}% · misreads ${b.misunderstandPct ?? 0}% of replies`;
+const SCENARIO_LABELS = { normal: "normal", asks_for_human: "asks for a human", gives_up: "gives up partway", misreads: "misreads a reply" };
+
+// Personas made before scenario mixes existed carried percentages; show them for old conversations only.
+function legacyBehaviourLine(b) {
+  if (!b) return null;
+  return `older setting: gives up ${b.giveUpPct ?? 0}% · asks for a human ${b.askHumanPct ?? 0}% · misreads ${b.misunderstandPct ?? 0}% of replies`;
+}
+
+function scenarioBadge(plan) {
+  if (!plan?.scenario || plan.scenario === "normal") return null;
+  return h("span", { class: "badge accent" }, SCENARIO_LABELS[plan.scenario] ?? plan.scenario);
+}
+
+function scenarioText(plan) {
+  if (!plan) return null;
+  const parts = [`${plan.minTurns}–${plan.turnLimit} user messages`];
+  if (plan.scenario === "normal") parts.unshift("normal (no planned event)");
+  if (plan.giveUpAtTurn) parts.push(`gives up before writing message ${plan.giveUpAtTurn}`);
+  if (plan.askHumanAtTurn) parts.push(`asks for a human in message ${plan.askHumanAtTurn}`);
+  if (plan.misreadAtTurn) parts.push(`misreads the bot's reply in message ${plan.misreadAtTurn}`);
+  if (plan.misunderstandPct) parts.push(`older setting: ${plan.misunderstandPct}% chance of misreading each reply`);
+  return parts.join(" · ");
 }
 
 // ---------- running batches of generated conversations ----------
@@ -115,16 +135,12 @@ async function runWithProgress(container, ids, after) {
 // ---------- personas ----------
 
 function personaForm(persona = {}, onSave) {
-  const b = persona.behaviour ?? { giveUpPct: 10, askHumanPct: 10, misunderstandPct: 10 };
   const f = {
     name: h("input", { id: "pf-name", value: persona.name ?? "", maxlength: 120, required: true }),
     description: h("textarea", { id: "pf-desc", rows: 3 }, persona.description ?? ""),
     goal: h("textarea", { id: "pf-goal", rows: 2 }, persona.goal ?? ""),
     communicationStyle: h("textarea", { id: "pf-style", rows: 2 }, persona.communicationStyle ?? ""),
     languageBackground: h("input", { id: "pf-lang", value: persona.languageBackground ?? "" }),
-    giveUpPct: h("input", { id: "pf-giveup", type: "number", min: 0, max: 100, value: b.giveUpPct }),
-    askHumanPct: h("input", { id: "pf-human", type: "number", min: 0, max: 100, value: b.askHumanPct }),
-    misunderstandPct: h("input", { id: "pf-mis", type: "number", min: 0, max: 100, value: b.misunderstandPct }),
     adversarial: h("input", { id: "pf-adv", type: "checkbox", checked: Boolean(persona.adversarial), style: "width:auto" }),
   };
   const save = h("button", { class: "primary", type: "submit" }, "Save persona");
@@ -136,7 +152,6 @@ function personaForm(persona = {}, onSave) {
       await onSave({
         name: f.name.value, description: f.description.value, goal: f.goal.value,
         communicationStyle: f.communicationStyle.value, languageBackground: f.languageBackground.value,
-        behaviour: { giveUpPct: Number(f.giveUpPct.value), askHumanPct: Number(f.askHumanPct.value), misunderstandPct: Number(f.misunderstandPct.value) },
         adversarial: f.adversarial.checked,
       });
       dialog.close();
@@ -153,13 +168,7 @@ function personaForm(persona = {}, onSave) {
       h("div", { class: "hint" }, "Leave empty and each conversation picks a realistic goal from your documents, so conversations vary.")),
     h("div", { class: "field" }, h("label", { for: "pf-style" }, "How they write"), f.communicationStyle),
     h("div", { class: "field" }, h("label", { for: "pf-lang" }, "Language background"), f.languageBackground),
-    h("fieldset", { class: "field plain" },
-      h("legend", {}, "Behaviour in simulated conversations"),
-      h("div", { class: "grid-3" },
-        h("div", {}, h("label", { for: "pf-giveup" }, "Gives up (%)"), f.giveUpPct, h("div", { class: "hint" }, "Chance of leaving without finishing.")),
-        h("div", {}, h("label", { for: "pf-human" }, "Asks for a human (%)"), f.askHumanPct, h("div", { class: "hint" }, "Chance of asking for a person.")),
-        h("div", {}, h("label", { for: "pf-mis" }, "Misreads replies (%)"), f.misunderstandPct, h("div", { class: "hint" }, "Chance per message."))),
-      h("p", { class: "hint" }, "These are applied exactly and recorded with each conversation, so you know which conversations were meant to end in giving up or asking for a human.")),
+    h("p", { class: "hint" }, "What happens in a simulated conversation (for example the user asking for a human) is set per run, under Interactions → Simulate conversations."),
     h("div", { class: "field row" }, f.adversarial, h("label", { for: "pf-adv", style: "margin:0" }, "Adversarial (tries to break the bot)")),
     h("div", { class: "row end" }, h("button", { type: "button", onclick: () => dialog.close() }, "Cancel"), save),
   );
@@ -212,7 +221,6 @@ export async function personasTab(body, projectId) {
     p.goal ? h("p", { class: "small" }, h("strong", {}, "Goal: "), p.goal) : null,
     p.communicationStyle ? h("p", { class: "small" }, h("strong", {}, "Writes: "), p.communicationStyle) : null,
     p.languageBackground ? h("p", { class: "small" }, h("strong", {}, "Language: "), p.languageBackground) : null,
-    h("p", { class: "small muted" }, behaviourLine(p.behaviour)),
     h("div", { class: "row" },
       h("button", { onclick: () => personaForm(p, async (data) => { await api("PATCH", `/api/personas/${p.id}`, data); toast("Persona saved."); reload(); }) }, "Edit"),
       h("button", { onclick: async () => { try { await api("POST", `/api/personas/${p.id}/duplicate`); reload(); } catch (err) { fail(err); } } }, "Duplicate"),
@@ -255,6 +263,22 @@ function simulatePanel(ctx) {
   const maxTurns = h("input", { id: "sim-max", type: "number", min: 1, max: 15, value: 6 });
   const model = h("select", { id: "sim-model" }, state.session.models.map((m) => h("option", { value: m.id }, m.label)));
   const label = h("input", { id: "sim-label", placeholder: "Optional, e.g. Pilot run – warm tone" });
+  const scen = {
+    askHuman: h("input", { id: "sc-human", type: "number", min: 0, max: 100, value: 0 }),
+    giveUp: h("input", { id: "sc-giveup", type: "number", min: 0, max: 100, value: 0 }),
+    misread: h("input", { id: "sc-misread", type: "number", min: 0, max: 100, value: 0 }),
+  };
+  const normal = h("strong");
+  const mixNote = h("span", { class: "small" });
+  const updateMix = () => {
+    const total = Math.max(0, Number(count.value) || 0);
+    const planned = Object.values(scen).reduce((n, el) => n + Math.max(0, Number(el.value) || 0), 0);
+    normal.textContent = String(Math.max(0, total - planned));
+    mixNote.textContent = planned > total ? ` The scenarios add up to more than ${total} conversations.` : "";
+    mixNote.className = planned > total ? "small danger-text" : "small";
+  };
+  [count, ...Object.values(scen)].forEach((el) => el.addEventListener("input", updateMix));
+  updateMix();
   const start = h("button", { class: "primary", type: "submit" }, "Run simulation");
   return h("form", { onsubmit: async (e) => {
     e.preventDefault();
@@ -264,6 +288,7 @@ function simulatePanel(ctx) {
       const { conversationIds } = await api("POST", `/api/projects/${projectId}/runs`, {
         kind: "simulated", botVersionId: version.value, personaIds, count: Number(count.value),
         minTurns: Number(minTurns.value), maxTurns: Number(maxTurns.value), simulatorModel: model.value, label: label.value,
+        scenarios: { askHuman: Number(scen.askHuman.value), giveUp: Number(scen.giveUp.value), misread: Number(scen.misread.value) },
       });
       done();
       await runWithProgress(area, conversationIds, refresh);
@@ -283,6 +308,13 @@ function simulatePanel(ctx) {
       h("div", { class: "field" }, h("label", { for: "sim-min" }, "At least (user messages)"), minTurns),
       h("div", { class: "field" }, h("label", { for: "sim-max" }, "At most (user messages)"), maxTurns),
       h("div", { class: "field" }, h("label", { for: "sim-label" }, "Run name"), label)),
+    h("fieldset", { class: "field plain" }, h("legend", {}, "Scenario mix"),
+      h("p", { class: "hint", style: "margin-top:0" }, "How many of the conversations should include each event. They are spread at random across the personas, and the moment each happens is chosen at random within the conversation. Each conversation is recorded with its scenario, so you can later check whether your evals spot them."),
+      h("div", { class: "grid-4" },
+        h("div", {}, h("label", { for: "sc-human" }, "User asks for a human"), scen.askHuman),
+        h("div", {}, h("label", { for: "sc-giveup" }, "User gives up partway"), scen.giveUp, h("div", { class: "hint" }, "Leaves without a word.")),
+        h("div", {}, h("label", { for: "sc-misread" }, "User misreads a reply"), scen.misread),
+        h("div", {}, h("label", {}, "Normal conversations"), h("div", { class: "mix-normal" }, normal), mixNote))),
     h("p", { class: "hint" }, "Each user message takes two AI calls (the user, then your bot), plus one for the satisfaction rating at the end. Watch the cost on the Overview page; you can stop a run at any time and continue it later."),
     start);
 }
@@ -534,13 +566,15 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
     filterSelect("source", "Source", [["simulated", "simulated"], ["hand-written", "hand-written"], ["imported", "imported"]]),
     filterSelect("personaId", "Persona", personas.map((p) => [p.id, p.name])),
     filterSelect("versionId", "Bot version", versions.map((v) => [v.id, `v${v.versionNo}${v.label ? ` – ${v.label}` : ""}`])),
-    filterSelect("runId", "Run", runs.map((r) => [r.id, r.label])));
+    filterSelect("runId", "Run", runs.map((r) => [r.id, r.label])),
+    filterSelect("scenario", "Scenario", Object.entries(SCENARIO_LABELS)));
   const rows = conversations.map((c) => h("tr", { class: "clickable", onclick: () => (location.hash = `#/p/${projectId}/interactions/${c.id}`) },
     h("td", {}, h("a", { href: `#/p/${projectId}/interactions/${c.id}`, onclick: (e) => e.stopPropagation() }, c.title || "(untitled)")),
     h("td", {}, h("span", { class: "badge" }, kindLabel(c))),
     h("td", { class: "small" }, c.meta?.personaName ?? ""),
     h("td", { class: "small" }, c.versionNo ? `v${c.versionNo}` : ""),
     h("td", { class: "small" }, c.messageCount),
+    h("td", {}, scenarioBadge(c.meta?.plan)),
     h("td", {}, statusBadge(c.meta)),
     h("td", { class: "small" }, c.meta?.rating ? `${c.meta.rating.score}/5` : ""),
     h("td", { class: "small" }, when(c.createdAt))));
@@ -549,7 +583,7 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
     filters,
     conversations.length
       ? h("div", { class: "table-wrap" }, h("table", {},
-          h("thead", {}, h("tr", {}, h("th", {}, "Title"), h("th", {}, "Source"), h("th", {}, "Persona"), h("th", {}, "Bot"), h("th", {}, "Messages"), h("th", {}, "Outcome"), h("th", {}, "Rating"), h("th", {}, "Created"))),
+          h("thead", {}, h("tr", {}, h("th", {}, "Title"), h("th", {}, "Source"), h("th", {}, "Persona"), h("th", {}, "Bot"), h("th", {}, "Messages"), h("th", {}, "Scenario"), h("th", {}, "Outcome"), h("th", {}, "Rating"), h("th", {}, "Created"))),
           h("tbody", {}, rows)))
       : h("p", { class: "empty" }, query.toString() ? "No interactions match these filters." : "No interactions yet. Create some above."));
 
@@ -584,12 +618,7 @@ async function conversationDetail(body, projectId, conversationId) {
   fact("Question", meta.kind === "single_question" ? (meta.inScope === true ? "answerable from the documents" : meta.inScope === false ? "not answerable from the documents" : "your own question") : null);
   fact("Outcome", statusBadge(meta));
   if (meta.rating) fact("Satisfaction (CSAT)", h("span", {}, h("strong", {}, `${meta.rating.score}/5`), ` “${meta.rating.comment}”`));
-  if (meta.plan) fact("Planned behaviour", [
-    `${meta.plan.minTurns}–${meta.plan.turnLimit} user messages`,
-    meta.plan.giveUpAtTurn ? `gives up before message ${meta.plan.giveUpAtTurn}` : null,
-    meta.plan.askHumanAtTurn ? `asks for a human in message ${meta.plan.askHumanAtTurn}` : null,
-    meta.plan.misunderstandPct ? `${meta.plan.misunderstandPct}% chance of misreading each reply` : null,
-  ].filter(Boolean).join(" · "));
+  if (meta.plan) fact("Scenario (planned)", scenarioText(meta.plan));
   fact("Note", meta.note);
   if (meta.error) fact("Last error", h("span", { class: "badge danger" }, meta.error));
 
@@ -618,7 +647,7 @@ async function conversationDetail(body, projectId, conversationId) {
         } }, "Delete")),
       h("div", { class: "facts" }, facts),
       meta.persona ? h("details", {}, h("summary", {}, "Persona as used in this conversation"),
-        h("div", { class: "rules" }, [meta.persona.description, meta.persona.communicationStyle && `Writes: ${meta.persona.communicationStyle}`, meta.persona.languageBackground && `Language: ${meta.persona.languageBackground}`, behaviourLine(meta.persona.behaviour)].filter(Boolean).join("\n"))) : null),
+        h("div", { class: "rules" }, [meta.persona.description, meta.persona.communicationStyle && `Writes: ${meta.persona.communicationStyle}`, meta.persona.languageBackground && `Language: ${meta.persona.languageBackground}`, legacyBehaviourLine(meta.persona.behaviour)].filter(Boolean).join("\n"))) : null),
     h("div", { class: "card chat-pane" }, h("div", { class: "chat-log tall" }, transcript.length ? transcript : h("p", { class: "empty" }, "No messages yet."))),
   );
 }

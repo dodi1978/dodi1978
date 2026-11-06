@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { makeApp, fakeClaude, defaultJson } from "./helpers.js";
-import { planConversation } from "../src/simulate.js";
+import { planConversation, assignScenarios, mayEndFrom } from "../src/simulate.js";
 import { parseCsv, conversationsFromText } from "../src/importer.js";
 
 const GUIDE = "Late returns cost 20p per book per day, up to five pounds per book.\n\nThe library opens at 9am on weekdays.";
@@ -28,18 +28,27 @@ async function runAll(call, ids) {
   }
 }
 
-const persona = (name, behaviour = {}) => ({ name, description: "A library member.", communicationStyle: "Short.", languageBackground: "English.", behaviour: { giveUpPct: 0, askHumanPct: 0, misunderstandPct: 0, ...behaviour } });
+const persona = (name) => ({ name, description: "A library member.", communicationStyle: "Short.", languageBackground: "English." });
 
-test("planning decides giving up and asking for a human up front", () => {
+test("a run's scenario mix is assigned exactly, and each plan says when its event happens", () => {
   let seed = 1;
   const rng = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  const always = planConversation(persona("x", { giveUpPct: 100 }), { minTurns: 2, maxTurns: 5 }, rng);
-  assert.ok(always.giveUpAtTurn >= 2 && always.giveUpAtTurn <= always.turnLimit);
-  const human = planConversation(persona("y", { askHumanPct: 100 }), { minTurns: 1, maxTurns: 4 }, rng);
+  const mix = assignScenarios(10, { askHuman: 2, giveUp: 3, misread: 1 }, rng);
+  assert.equal(mix.length, 10);
+  const count = (k) => mix.filter((x) => x === k).length;
+  assert.deepEqual([count("asks_for_human"), count("gives_up"), count("misreads"), count("normal")], [2, 3, 1, 4]);
+
+  const quit = planConversation("gives_up", { minTurns: 2, maxTurns: 5 }, rng);
+  assert.ok(quit.giveUpAtTurn >= 2 && quit.giveUpAtTurn <= 5);
+  assert.equal(quit.scenario, "gives_up");
+  const human = planConversation("asks_for_human", { minTurns: 1, maxTurns: 4 }, rng);
+  assert.ok(human.askHumanAtTurn >= 1 && human.askHumanAtTurn <= 4);
   assert.equal(human.giveUpAtTurn, null);
-  assert.ok(human.askHumanAtTurn >= 1 && human.askHumanAtTurn <= human.turnLimit);
-  const calm = planConversation(persona("z"), { minTurns: 3, maxTurns: 3 }, rng);
-  assert.deepEqual([calm.turnLimit, calm.giveUpAtTurn, calm.askHumanAtTurn], [3, null, null]);
+  const misread = planConversation("misreads", { minTurns: 1, maxTurns: 6 }, rng);
+  assert.ok(misread.misreadAtTurn >= 2 && misread.misreadAtTurn <= 6);
+  assert.ok(mayEndFrom(misread) > misread.misreadAtTurn, "the user cannot leave before the planned misreading");
+  const calm = planConversation("normal", { minTurns: 3, maxTurns: 3 }, rng);
+  assert.deepEqual([calm.turnLimit, calm.giveUpAtTurn, calm.askHumanAtTurn, calm.misreadAtTurn], [3, null, null, null]);
 });
 
 test("personas: starter set, create, edit, duplicate, generate, delete", async (t) => {
@@ -49,12 +58,11 @@ test("personas: starter set, create, edit, duplicate, generate, delete", async (
   assert.equal((await call("POST", `/api/projects/${projectId}/personas/starter`)).data.added, 0, "not added twice");
   const bad = await call("POST", `/api/projects/${projectId}/personas`, { name: " " });
   assert.equal(bad.status, 400);
-  const created = await call("POST", `/api/projects/${projectId}/personas`, persona("Student", { giveUpPct: 250 }));
-  assert.equal(created.data.persona.behaviour.giveUpPct, 100, "percentages are capped");
-  const edited = await call("PATCH", `/api/personas/${created.data.persona.id}`, { languageBackground: "Welsh and English", behaviour: { askHumanPct: 40 } });
+  const created = await call("POST", `/api/projects/${projectId}/personas`, { ...persona("Student"), behaviour: { giveUpPct: 50 } });
+  assert.equal(created.data.persona.behaviour, undefined, "personas are descriptive: no behaviour percentages");
+  const edited = await call("PATCH", `/api/personas/${created.data.persona.id}`, { languageBackground: "Welsh and English" });
   assert.equal(edited.data.persona.languageBackground, "Welsh and English");
-  assert.equal(edited.data.persona.behaviour.askHumanPct, 40);
-  assert.equal(edited.data.persona.behaviour.giveUpPct, 100, "other settings are kept");
+  assert.equal(edited.data.persona.description, "A library member.", "other fields are kept");
   const copy = await call("POST", `/api/personas/${created.data.persona.id}/duplicate`);
   assert.equal(copy.data.persona.name, "Student (copy)");
   const generated = await call("POST", `/api/projects/${projectId}/personas/generate`, { brief: "students", count: 2 });
@@ -92,30 +100,73 @@ test("a simulated conversation runs turn by turn and ends with a rating", async 
   assert.deepEqual(runs.data.runs[0].pendingIds, []);
 });
 
-test("planned behaviour: asking for a human, giving up, and the turn limit", async (t) => {
+test("scenarios: asking for a human, giving up, misreading, and the turn limit", async (t) => {
   const neverEnds = fakeClaude(undefined, (req) => (req.schema.properties.action ? { goal: "g", action: "send", message: "More?", end_reason: "none" } : defaultJson(req)));
   const { call, projectId } = await setup(t, { claude: neverEnds });
-  const human = (await call("POST", `/api/projects/${projectId}/personas`, persona("Wants a person", { askHumanPct: 100 }))).data.persona;
-  const leaver = (await call("POST", `/api/projects/${projectId}/personas`, persona("Leaver", { giveUpPct: 100 }))).data.persona;
-  const plain = (await call("POST", `/api/projects/${projectId}/personas`, persona("Talker"))).data.persona;
+  const one = (await call("POST", `/api/projects/${projectId}/personas`, persona("Member"))).data.persona;
+  const two = (await call("POST", `/api/projects/${projectId}/personas`, persona("Visitor"))).data.persona;
 
-  const r1 = await call("POST", `/api/projects/${projectId}/runs`, { kind: "simulated", personaIds: [human.id, leaver.id, plain.id], count: 3, minTurns: 3, maxTurns: 3 });
-  await runAll(call, r1.data.conversationIds);
-  const [a, b, c] = await Promise.all(r1.data.conversationIds.map((id) => call("GET", `/api/conversations/${id}`)));
+  const tooMany = await call("POST", `/api/projects/${projectId}/runs`, { kind: "simulated", personaIds: [one.id], count: 2, maxTurns: 3, scenarios: { askHuman: 2, giveUp: 1 } });
+  assert.equal(tooMany.status, 400);
 
+  const run = await call("POST", `/api/projects/${projectId}/runs`, {
+    kind: "simulated", personaIds: [one.id, two.id], count: 5, minTurns: 3, maxTurns: 4, scenarios: { askHuman: 1, giveUp: 1, misread: 1 },
+  });
+  assert.equal(run.status, 200, JSON.stringify(run.data));
+  await runAll(call, run.data.conversationIds);
+  const all = await Promise.all(run.data.conversationIds.map((id) => call("GET", `/api/conversations/${id}`)));
+  const by = (scenario) => all.filter((r) => r.data.conversation.meta.plan.scenario === scenario);
+  assert.deepEqual(["asks_for_human", "gives_up", "misreads", "normal"].map((k) => by(k).length), [1, 1, 1, 2]);
+
+  const [a] = by("asks_for_human");
   assert.equal(a.data.conversation.meta.outcome, "asked_for_human");
   assert.equal(a.data.conversation.meta.escalated, true);
-  const askTurn = a.data.conversation.meta.plan.askHumanAtTurn;
-  assert.equal(a.data.messages.filter((m) => m.role === "user").length, askTurn, "ends after the bot answers the request");
-  assert.equal(a.data.messages.filter((m) => m.role === "user").at(-1).meta.askedForHuman, true);
+  const userMessages = (r) => r.data.messages.filter((m) => m.role === "user");
+  assert.equal(userMessages(a).length, a.data.conversation.meta.plan.askHumanAtTurn, "ends after the bot answers the request");
+  assert.equal(userMessages(a).at(-1).meta.askedForHuman, true);
 
+  const [b] = by("gives_up");
   assert.equal(b.data.conversation.meta.outcome, "gave_up");
   assert.equal(b.data.conversation.meta.abandoned, true);
-  assert.equal(b.data.messages.filter((m) => m.role === "user").length, b.data.conversation.meta.plan.giveUpAtTurn - 1, "leaves without writing");
+  assert.equal(userMessages(b).length, b.data.conversation.meta.plan.giveUpAtTurn - 1, "leaves without writing");
   assert.equal(b.data.messages.at(-1).role, "assistant");
 
-  assert.equal(c.data.conversation.meta.outcome, "max_turns");
-  assert.equal(c.data.messages.filter((m) => m.role === "user").length, 3);
+  const [m] = by("misreads");
+  const misread = userMessages(m).filter((x) => x.meta.misunderstanding);
+  assert.equal(misread.length, 1, "exactly one planned misreading");
+  assert.equal(userMessages(m).indexOf(misread[0]) + 1, m.data.conversation.meta.plan.misreadAtTurn);
+
+  for (const n of by("normal")) {
+    assert.equal(n.data.conversation.meta.outcome, "max_turns");
+    assert.equal(userMessages(n).length, 4);
+    assert.ok(userMessages(n).every((x) => !x.meta.misunderstanding && !x.meta.askedForHuman));
+  }
+
+  const filtered = await call("GET", `/api/projects/${projectId}/conversations?scenario=misreads`);
+  assert.equal(filtered.data.conversations.length, 1);
+  const runs = await call("GET", `/api/projects/${projectId}/runs`);
+  assert.deepEqual(runs.data.runs[0].settings.scenarios, { askHuman: 1, giveUp: 1, misread: 1 });
+});
+
+test("a simulated user cannot end before the planned event", async (t) => {
+  // This user always wants to stop as soon as allowed.
+  let ignored = 0;
+  const eager = fakeClaude(undefined, (req) => {
+    if (!req.schema.properties.action) return defaultJson(req);
+    const prompt = req.messages[0].content;
+    // Ignores "do not end yet" the first time, like a model occasionally might.
+    if (/Important: the user does not leave yet|Do not end/.test(prompt) && (ignored++ > 0 || /Important/.test(prompt))) return { goal: "g", action: "send", message: "Still here.", end_reason: "none" };
+    return { goal: "g", action: "end", message: "", end_reason: "goal_met" };
+  });
+  const { call, projectId } = await setup(t, { claude: eager });
+  const p = (await call("POST", `/api/projects/${projectId}/personas`, persona("Quick"))).data.persona;
+  const run = await call("POST", `/api/projects/${projectId}/runs`, { kind: "simulated", personaIds: [p.id], count: 1, minTurns: 1, maxTurns: 6, scenarios: { misread: 1 } });
+  await runAll(call, run.data.conversationIds);
+  const conv = await call("GET", `/api/conversations/${run.data.conversationIds[0]}`);
+  const turn = conv.data.conversation.meta.plan.misreadAtTurn;
+  const users = conv.data.messages.filter((m) => m.role === "user");
+  assert.equal(users.length, turn, "kept going until the misreading, then left");
+  assert.equal(users.at(-1).meta.misunderstanding, true);
 });
 
 test("test questions are generated and each is run through the bot", async (t) => {

@@ -230,3 +230,7 @@ tr.clickable:hover td { background: var(--surface-2); }
   .turn-row { grid-template-columns: 1fr; }
   .persona-grid { grid-template-columns: 1fr; }
 }
+
+.mix-normal { font-size: 1.3rem; padding: 0.3rem 0; }
+.danger-text { color: var(--danger); }
+.filters { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }

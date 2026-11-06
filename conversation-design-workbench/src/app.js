@@ -9,7 +9,7 @@ import { claudeCost, voyageCost, MODELS, EFFORTS, modelInfo } from "./pricing.js
 import { DEFAULT_BOT, sanitiseSettings, retrieve, buildSystemPrompt, buildMessages, groundingRules } from "./rag.js";
 import { logUsage, projectUsage } from "./usage.js";
 import { STARTER_PERSONAS, sanitisePersona } from "./personas.js";
-import { planConversation, personaTurn, rateConversation, generateQuestions, generatePersonas } from "./simulate.js";
+import { planConversation, assignScenarios, mayEndFrom, personaTurn, rateConversation, generateQuestions, generatePersonas } from "./simulate.js";
 import { parseImport } from "./importer.js";
 
 const COOKIE = "cdw_session";
@@ -441,6 +441,7 @@ async function listConversations({ db }, { id }, _body, url) {
   if (q.get("personaId")) add("c.persona_id = ?", q.get("personaId"));
   if (q.get("runId")) add("c.run_id = ?", q.get("runId"));
   if (q.get("versionId")) add("c.bot_version_id = ?", q.get("versionId"));
+  if (q.get("scenario")) add("COALESCE(c.meta->'plan'->>'scenario', '') = ?", q.get("scenario"));
   if (q.get("kind") === "live") where.push("c.source = 'hand-written' AND COALESCE(c.meta->>'kind', 'live') = 'live'");
   const rows = await db.query(
     `SELECT c.*, v.version_no, r.label AS run_label, (SELECT count(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count
@@ -630,7 +631,7 @@ async function generatePersonasRoute({ db, claude }, { id }, body) {
 
 async function updatePersona({ db }, { id }, body) {
   const row = await loadPersona(db, id);
-  const persona = sanitisePersona({ ...row.data, ...(body.persona ?? body), behaviour: { ...row.data.behaviour, ...(body.persona ?? body).behaviour } });
+  const persona = sanitisePersona({ ...row.data, ...(body.persona ?? body) });
   if (!persona.name) throw new HttpError(400, "Give the persona a name.");
   await db.query("UPDATE personas SET data = $2, updated_at = now() WHERE id = $1", [id, JSON.stringify(persona)]);
   return { persona: personaOut(await loadPersona(db, id)) };
@@ -710,14 +711,19 @@ async function createRun({ db }, { id }, body) {
     const minTurns = clampInt(body.minTurns, 1, 15, 2);
     const maxTurns = clampInt(body.maxTurns, minTurns, 15, Math.max(minTurns, 6));
     const simulatorModel = modelInfo(body.simulatorModel) ? body.simulatorModel : DEFAULT_BOT.model;
-    const settings = { botVersionId: version.id, versionNo: version.version_no, personaIds, count, minTurns, maxTurns, simulatorModel };
+    const s = body.scenarios ?? {};
+    const scenarios = { askHuman: clampInt(s.askHuman, 0, count, 0), giveUp: clampInt(s.giveUp, 0, count, 0), misread: clampInt(s.misread, 0, count, 0) };
+    if (scenarios.askHuman + scenarios.giveUp + scenarios.misread > count) throw new HttpError(400, `The scenarios add up to more than the ${count} conversations in this run.`);
+    if ((scenarios.giveUp || scenarios.misread) && maxTurns < 2) throw new HttpError(400, "Giving up and misreading a reply need conversations of at least 2 user messages. Raise the maximum.");
+    const settings = { botVersionId: version.id, versionNo: version.version_no, personaIds, count, minTurns, maxTurns, simulatorModel, scenarios };
+    const assigned = assignScenarios(count, scenarios);
     const label = String(body.label || `Run ${n}: ${count} simulated conversation${count === 1 ? "" : "s"}, v${version.version_no}`).slice(0, 200);
     await db.query("INSERT INTO runs (id, project_id, kind, label, settings) VALUES ($1, $2, $3, $4, $5)", [runId, id, kind, label, JSON.stringify(settings)]);
     for (let i = 0; i < count; i++) {
       const persona = personas[i % personas.length];
       const meta = {
         kind: "simulated", status: "pending", persona: persona.data, personaName: persona.data.name,
-        plan: planConversation(persona.data, { minTurns, maxTurns }), simulatorModel,
+        plan: planConversation(assigned[i], { minTurns, maxTurns }), simulatorModel,
       };
       conversations.push({ personaId: persona.id, title: `${persona.data.name} #${Math.floor(i / personas.length) + 1}`, meta });
     }
@@ -818,14 +824,22 @@ async function simulateStep(ctx, { id }) {
     if (turnNo > plan.turnLimit) return { done: true, meta: await finishSimulated(ctx, conv, meta, "max_turns"), messages: [] };
 
     meta.status = "running";
-    const misunderstand = turnNo > 1 && Math.random() * 100 < (plan.misunderstandPct ?? 0);
+    // misunderstandPct: conversations planned before scenario mixes existed.
+    const misunderstand = plan.misreadAtTurn === turnNo || (turnNo > 1 && Math.random() * 100 < (plan.misunderstandPct ?? 0));
     const passages = turnNo === 1 && !meta.goal ? await samplePassages(db, conv.project_id, 4) : [];
-    const result = await personaTurn(claude, { model: meta.simulatorModel, persona: meta.persona, plan, goal: meta.goal, messages: history, turnNo, misunderstand, passages });
+    const ask = (insist) => personaTurn(claude, { model: meta.simulatorModel, persona: meta.persona, plan, goal: meta.goal, messages: history, turnNo, misunderstand, passages, insist });
+    let result = await ask(false);
     await logClaude(db, conv.project_id, result, "simulated user");
+    const mayEnd = turnNo >= mayEndFrom(plan) && plan.askHumanAtTurn !== turnNo;
+    // The planned scenario must happen: if the simulated user tried to leave too early, ask once more.
+    if (!mayEnd && !String(result.turn.message ?? "").trim()) {
+      result = await ask(true);
+      await logClaude(db, conv.project_id, result, "simulated user");
+    }
     const turn = result.turn;
     if (!meta.goal && turn.goal) meta.goal = String(turn.goal).slice(0, 1000);
     const message = String(turn.message ?? "").trim().slice(0, 4000);
-    const wantsEnd = turn.action === "end" && turnNo > plan.minTurns && plan.askHumanAtTurn !== turnNo;
+    const wantsEnd = turn.action === "end" && mayEnd;
 
     if (wantsEnd && !message) {
       const outcome = turn.end_reason === "gave_up" ? "gave_up" : turn.end_reason === "goal_met" ? "goal_met" : "other";

@@ -1,25 +1,61 @@
 // Simulated users: an AI plays a persona talking to the chatbot, one turn at a time.
-// Behaviour that researchers need to control (giving up, asking for a human,
-// misunderstanding) is decided here in code and recorded, so it is known
-// ground truth rather than something the AI may or may not do.
+// Personas describe who the user is. What a run should cover (conversations where
+// the user asks for a human, gives up, or misreads a reply) is a test-design choice:
+// the researcher sets a scenario mix per run, and each conversation's scenario is
+// decided here in code and recorded, so it is known ground truth rather than
+// something the AI may or may not do.
 
 import { personaProfile } from "./personas.js";
+
+export const SCENARIOS = {
+  normal: "normal",
+  asks_for_human: "asks for a human",
+  gives_up: "gives up partway",
+  misreads: "misreads a reply",
+};
 
 export function randomInt(min, max, rng = Math.random) {
   return min + Math.floor(rng() * (max - min + 1));
 }
 
+// counts: { askHuman, giveUp, misread }; the rest of the conversations are normal.
+// Returns one scenario per conversation, shuffled so they are spread across personas.
+export function assignScenarios(total, counts = {}, rng = Math.random) {
+  const list = [
+    ...Array(counts.askHuman ?? 0).fill("asks_for_human"),
+    ...Array(counts.giveUp ?? 0).fill("gives_up"),
+    ...Array(counts.misread ?? 0).fill("misreads"),
+  ];
+  while (list.length < total) list.push("normal");
+  for (let i = list.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [list[i], list[j]] = [list[j], list[i]];
+  }
+  return list.slice(0, total);
+}
+
 // Decides up front how a simulated conversation will go. The simulated user ends
-// the conversation when they are done, but never before minTurns and never after
-// maxTurns user messages.
-export function planConversation(persona, { minTurns, maxTurns }, rng = Math.random) {
+// the conversation when they are done, but never before minTurns user messages,
+// never before the planned scenario has happened, and never after maxTurns.
+export function planConversation(scenario, { minTurns, maxTurns }, rng = Math.random) {
   const turnLimit = maxTurns;
-  const b = persona.behaviour ?? {};
-  const plan = { turnLimit, minTurns, giveUpAtTurn: null, askHumanAtTurn: null, misunderstandPct: b.misunderstandPct ?? 0 };
+  const plan = { scenario, turnLimit, minTurns, giveUpAtTurn: null, askHumanAtTurn: null, misreadAtTurn: null };
   // Giving up means leaving before writing user message n (n >= 2), without a word.
-  if (turnLimit >= 2 && rng() * 100 < (b.giveUpPct ?? 0)) plan.giveUpAtTurn = randomInt(2, turnLimit, rng);
-  else if (rng() * 100 < (b.askHumanPct ?? 0)) plan.askHumanAtTurn = randomInt(1, turnLimit, rng);
+  if (scenario === "gives_up") plan.giveUpAtTurn = randomInt(2, Math.max(2, turnLimit), rng);
+  if (scenario === "asks_for_human") plan.askHumanAtTurn = randomInt(1, turnLimit, rng);
+  // Misreading needs a bot reply to misread, so it happens in message 2 or later.
+  if (scenario === "misreads") plan.misreadAtTurn = randomInt(2, Math.max(2, turnLimit), rng);
   return plan;
+}
+
+// The first user message at which the simulated user may choose to end.
+export function mayEndFrom(plan) {
+  return Math.max(
+    (plan.minTurns ?? 1) + 1,
+    plan.askHumanAtTurn ?? 0,
+    plan.giveUpAtTurn ?? 0,
+    plan.misreadAtTurn ? plan.misreadAtTurn + 1 : 0,
+  );
 }
 
 function transcriptText(messages) {
@@ -49,7 +85,7 @@ You only ever write the user's messages, never the chatbot's. Do not mention tha
 Real users rarely write long, perfectly structured messages; match the persona instead.`;
 
 // Writes the persona's next message (or decides to end). turnNo counts user messages, from 1.
-export async function personaTurn(claude, { model, effort = "low", persona, plan, goal, messages, turnNo, misunderstand, passages }) {
+export async function personaTurn(claude, { model, effort = "low", persona, plan, goal, messages, turnNo, misunderstand, passages, insist = false }) {
   const instructions = [];
   if (turnNo === 1) {
     instructions.push(goal
@@ -59,11 +95,12 @@ export async function personaTurn(claude, { model, effort = "low", persona, plan
   } else {
     instructions.push(`Your goal: ${goal}`);
     instructions.push(`Write the user's message number ${turnNo}, responding to the chatbot's last reply.`);
-    if (turnNo <= plan.minTurns) instructions.push("Do not end the conversation yet: set action to \"send\".");
+    if (turnNo < mayEndFrom(plan)) instructions.push("Do not end the conversation yet: set action to \"send\".");
     else instructions.push("If your goal has been met, or you have nothing more to ask, you may end: set action to \"end\" and end_reason to \"goal_met\" (with a short closing message such as thanks, or an empty message if this person would just leave). Otherwise set action to \"send\".");
   }
   if (plan.askHumanAtTurn === turnNo) instructions.push("In this message, ask to speak to a human (a real person or member of staff), in this persona's own words. Set action to \"send\".");
   if (misunderstand) instructions.push("In this message, misunderstand or misread something in the chatbot's last reply, the way this persona plausibly might, and respond based on that misunderstanding. Do not say that you misunderstood.");
+  if (insist) instructions.push("Important: the user does not leave yet. Write a real next message (not empty) and set action to \"send\".");
   instructions.push("Keep \"goal\" the same once chosen.");
 
   const prompt = `PERSONA\n${personaProfile(persona)}\n\nCONVERSATION SO FAR\n${transcriptText(messages)}\n\nINSTRUCTIONS\n${instructions.join("\n")}`;
@@ -144,12 +181,9 @@ const PERSONAS_SCHEMA = {
           goal: { type: "string", description: "Empty unless the brief implies a specific goal." },
           communication_style: { type: "string" },
           language_background: { type: "string" },
-          give_up_pct: { type: "integer", description: "0 to 100: chance this person leaves a conversation early." },
-          ask_human_pct: { type: "integer", description: "0 to 100: chance they ask for a human." },
-          misunderstand_pct: { type: "integer", description: "0 to 100: chance per message that they misread a reply." },
           adversarial: { type: "boolean" },
         },
-        required: ["name", "description", "goal", "communication_style", "language_background", "give_up_pct", "ask_human_pct", "misunderstand_pct", "adversarial"],
+        required: ["name", "description", "goal", "communication_style", "language_background", "adversarial"],
         additionalProperties: false,
       },
     },
@@ -171,7 +205,6 @@ export async function generatePersonas(claude, { model, effort = "low", brief, c
     goal: p.goal,
     communicationStyle: p.communication_style,
     languageBackground: p.language_background,
-    behaviour: { giveUpPct: p.give_up_pct, askHumanPct: p.ask_human_pct, misunderstandPct: p.misunderstand_pct },
     adversarial: p.adversarial,
   }));
   return { ...result, personas };
