@@ -11,6 +11,12 @@
   # Kept as normal packages rather than bundled (they include large worker files).
   external_node_modules = ["unpdf", "mammoth", "pg"]
 
+# The public chat page for real users: /c/<link code>
+[[redirects]]
+  from = "/c/*"
+  to = "/chat.html"
+  status = 200
+
 [[headers]]
   for = "/*"
   [headers.values]

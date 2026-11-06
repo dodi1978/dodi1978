@@ -1,6 +1,7 @@
 // Turning existing transcripts (CSV, Excel or pasted text) into conversations.
 
 import readXlsxFile from "read-excel-file/node";
+import { parseImportance } from "./framework.js";
 
 export class ImportError extends Error {
   constructor(message) {
@@ -149,4 +150,111 @@ export async function parseImport({ filename, contentBase64, text }) {
   if (ext === "csv" || ext === "tsv") return conversationsFromRows(parseCsv(content));
   if (ext === "txt" || ext === "md" || !ext) return conversationsFromText(content);
   throw new ImportError(`Files of type .${ext} cannot be imported. Use CSV, Excel (.xlsx) or a text file.`);
+}
+
+// ---------- personas from a spreadsheet ----------
+
+// Reads the first sheet of a CSV or Excel file into rows (arrays of strings).
+export async function readTableFile({ filename, contentBase64 }) {
+  if (!contentBase64) throw new ImportError("Choose a CSV or Excel file.");
+  const bytes = Buffer.from(String(contentBase64), "base64");
+  if (bytes.length > 4 * 1024 * 1024) throw new ImportError("The file is larger than 4 MB.");
+  const ext = /\.([a-z0-9]+)$/i.exec(filename || "")?.[1]?.toLowerCase();
+  if (ext === "xlsx") {
+    let sheets;
+    try {
+      sheets = await readXlsxFile(bytes);
+    } catch {
+      throw new ImportError("That Excel file could not be read. Save it as .xlsx, or export it as CSV.");
+    }
+    return (sheets[0]?.data ?? [])
+      .map((r) => r.map((c) => (c === null || c === undefined ? "" : String(c))))
+      .filter((r) => r.some((c) => c.trim() !== ""));
+  }
+  if (ext === "csv" || ext === "tsv" || ext === "txt") return parseCsv(bytes.toString("utf8"));
+  throw new ImportError("Use a CSV or Excel (.xlsx) file, with one row per persona.");
+}
+
+const norm = (h) => String(h ?? "").trim().toLowerCase().replace(/[_\-:()]+/g, " ").replace(/\s+/g, " ").trim();
+
+const PERSONA_FIELDS = {
+  name: ["name", "persona", "persona name", "participant", "participant id", "id", "label", "pseudonym"],
+  description: ["description", "who they are", "summary", "profile", "background", "bio", "about"],
+  goal: ["goal", "goals of the user", "aim", "task", "need"],
+  communicationStyle: ["communication style", "how they write", "style", "writing style", "tone"],
+  languageBackground: ["language", "language background", "languages", "first language", "l1"],
+  adversarial: ["adversarial"],
+};
+const IMPORTANCE_WORDS = ["importance", "level", "rating", "score", "priority", "weight"];
+const NOTE_WORDS = ["note", "notes", "comment", "comments", "needs", "description", "detail", "details"];
+const EVIDENCE_WORDS = ["evidence", "quote", "quotes", "quotation", "quotations", "example", "examples"];
+
+// One row per persona. Columns are matched by name: the persona fields above, and for each
+// rapport dimension either one column ("Autonomy") holding a level or a note, or
+// separate "Autonomy importance", "Autonomy note" and "Autonomy evidence" columns.
+export function personasFromRows(rows, framework) {
+  if (rows.length < 2) throw new ImportError("The file needs a header row and at least one persona.");
+  const header = rows[0].map(norm);
+  const mapping = {};
+  const used = new Set();
+  const assign = (i, field, label) => {
+    mapping[rows[0][i]] = label;
+    used.add(i);
+    return field;
+  };
+  const columns = [];
+  header.forEach((h, i) => {
+    for (const [field, names] of Object.entries(PERSONA_FIELDS)) {
+      if (names.includes(h)) {
+        columns.push({ i, field: assign(i, field, field) });
+        return;
+      }
+    }
+    for (const d of framework?.dimensions ?? []) {
+      const names = [norm(d.name), norm(d.key)];
+      const base = names.find((n) => h === n || h.startsWith(`${n} `));
+      if (!base) continue;
+      const rest = h.slice(base.length).trim();
+      let part = "combined";
+      if (IMPORTANCE_WORDS.includes(rest)) part = "importance";
+      else if (NOTE_WORDS.includes(rest)) part = "note";
+      else if (EVIDENCE_WORDS.includes(rest)) part = "evidence";
+      else if (rest) continue;
+      columns.push({ i, dim: d.key, part: assign(i, part, `${d.name}: ${part === "combined" ? "level or note" : part}`) });
+      return;
+    }
+  });
+  const unmapped = rows[0].filter((_, i) => !used.has(i) && String(rows[0][i]).trim());
+
+  // Work out each numeric column's scale from the highest value in it (1-3, 1-5, 1-7 or 1-10).
+  const scale = {};
+  for (const c of columns.filter((c) => c.part === "importance" || c.part === "combined")) {
+    const nums = rows.slice(1).map((r) => Number(String(r[c.i] ?? "").trim())).filter((n) => Number.isFinite(n) && String(n) !== "");
+    const max = Math.max(0, ...nums);
+    scale[c.i] = max ? (max <= 3 ? 3 : max <= 5 ? 5 : max <= 7 ? 7 : 10) : undefined;
+  }
+
+  const personas = rows.slice(1).map((row, n) => {
+    const p = { rapport: {} };
+    for (const c of columns) {
+      const value = String(row[c.i] ?? "").trim();
+      if (!value) continue;
+      if (c.field === "adversarial") p.adversarial = ["yes", "y", "true", "1", "x"].includes(value.toLowerCase());
+      else if (c.field) p[c.field] = value;
+      else {
+        const entry = (p.rapport[c.dim] ??= { importance: "", note: "" });
+        if (c.part === "importance") entry.importance = parseImportance(value, scale[c.i]);
+        else if (c.part === "note") entry.note = value;
+        else if (c.part === "evidence") entry.evidence = value.split(/\n|\s\|\s/).map((q) => q.trim()).filter(Boolean);
+        else {
+          const level = value.length <= 12 ? parseImportance(value, scale[c.i]) : "";
+          if (level) entry.importance = level;
+          else entry.note = entry.note ? `${entry.note} ${value}` : value;
+        }
+      }
+    }
+    if (!p.name) p.name = `Persona ${n + 1}`;
+    return p;
+  }).filter((p) => Object.keys(p).length > 2 || Object.keys(p.rapport).length || !/^Persona \d+$/.test(p.name));
+  return { personas, mapping, unmapped };
 }

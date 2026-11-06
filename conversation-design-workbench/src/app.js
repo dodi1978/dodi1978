@@ -2,15 +2,16 @@
 // Netlify (netlify/functions/api.mjs) and the plain Node server (server.js) both
 // wrap this, so moving between hosts does not touch the app itself.
 
-import { randomUUID, createHmac, timingSafeEqual } from "node:crypto";
+import { randomUUID, randomBytes, createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { extractFromFile, extractFromUrl, chunkText, normalise, DocumentError } from "./documents.js";
 import { toPgVector } from "./embeddings.js";
 import { claudeCost, voyageCost, MODELS, EFFORTS, modelInfo } from "./pricing.js";
 import { DEFAULT_BOT, sanitiseSettings, retrieve, buildSystemPrompt, buildMessages, groundingRules } from "./rag.js";
 import { logUsage, projectUsage } from "./usage.js";
 import { STARTER_PERSONAS, sanitisePersona } from "./personas.js";
-import { planConversation, personaTurn, rateConversation, generateQuestions, generatePersonas } from "./simulate.js";
-import { parseImport } from "./importer.js";
+import { planConversation, assignScenarios, mayEndFrom, personaTurn, rateConversation, generateQuestions, generatePersonas, identifyUserTypes, draftPersonaFromResearch } from "./simulate.js";
+import { parseImport, personasFromRows, readTableFile } from "./importer.js";
+import { GAAFFE, frameworkOf, sanitiseFramework } from "./framework.js";
 
 const COOKIE = "cdw_session";
 const EMBED_BATCH = 48;
@@ -92,6 +93,14 @@ function routes() {
     ["PATCH", "/api/personas/:id", updatePersona],
     ["DELETE", "/api/personas/:id", deletePersona],
     ["POST", "/api/personas/:id/duplicate", duplicatePersona],
+    ["GET", "/api/projects/:id/share", getShare],
+    ["PUT", "/api/projects/:id/share", saveShare],
+    ["POST", "/api/projects/:id/share/new-link", newShareLink],
+    ["GET", "/api/projects/:id/framework", getFramework],
+    ["PUT", "/api/projects/:id/framework", saveFramework],
+    ["POST", "/api/projects/:id/personas/import", importPersonas],
+    ["POST", "/api/projects/:id/personas/research/types", researchTypes],
+    ["POST", "/api/projects/:id/personas/research/draft", researchDraft],
     ["GET", "/api/projects/:id/runs", listRuns],
     ["POST", "/api/projects/:id/runs", createRun],
     ["DELETE", "/api/runs/:id", deleteRun],
@@ -136,6 +145,11 @@ export function createApp({ db, claude, embedder, passphrase, fetchImpl = fetch,
         if (url.pathname === "/api/login" && request.method === "POST") return await login(request);
         if (url.pathname === "/api/logout" && request.method === "POST") return logout();
         if (!url.pathname.startsWith("/api/")) throw new HttpError(404, "Not found.");
+        // The public chat for real users: no passphrase, only what a participant needs.
+        if (url.pathname.startsWith("/api/public/")) {
+          if (!ctx.db) throw new HttpError(503, "This chat is not available right now.");
+          return json(await publicRoute(ctx, request, url));
+        }
         if (!authorised(request)) throw new HttpError(401, passphrase ? "Please enter the passphrase." : "No passphrase is set. Add WORKBENCH_PASSPHRASE to the site's environment variables.");
         if (!ctx.db) throw new HttpError(503, "No database is connected. See the setup guide (DEPLOY.md).");
         for (const route of table) {
@@ -253,7 +267,7 @@ async function deleteProject({ db }, { id }) {
 async function duplicateProject({ db }, { id }) {
   const source = await loadProject(db, id);
   const newId = randomUUID();
-  await db.query("INSERT INTO projects (id, name, description, bot_draft) VALUES ($1, $2, $3, $4)", [newId, `${source.name} (copy)`, source.description, JSON.stringify(source.bot_draft)]);
+  await db.query("INSERT INTO projects (id, name, description, bot_draft, framework) VALUES ($1, $2, $3, $4, $5)", [newId, `${source.name} (copy)`, source.description, JSON.stringify(source.bot_draft), source.framework ? JSON.stringify(source.framework) : null]);
   const docs = await db.query("SELECT * FROM documents WHERE project_id = $1", [id]);
   for (const doc of docs) {
     const docId = randomUUID();
@@ -423,7 +437,9 @@ function conversationOut(c) {
   return {
     id: c.id, projectId: c.project_id, botVersionId: c.bot_version_id, versionNo: c.version_no ?? null, source: c.source,
     title: c.title, personaId: c.persona_id ?? null, runId: c.run_id ?? null, runLabel: c.run_label ?? null,
-    meta: c.meta, messageCount: c.message_count ?? undefined, createdAt: c.created_at, updatedAt: c.updated_at,
+    // keyHash is the participant's secret for a real-user chat: never sent anywhere.
+    meta: c.meta ? (({ keyHash, ...rest }) => rest)(c.meta) : c.meta,
+    messageCount: c.message_count ?? undefined, createdAt: c.created_at, updatedAt: c.updated_at,
   };
 }
 
@@ -441,7 +457,9 @@ async function listConversations({ db }, { id }, _body, url) {
   if (q.get("personaId")) add("c.persona_id = ?", q.get("personaId"));
   if (q.get("runId")) add("c.run_id = ?", q.get("runId"));
   if (q.get("versionId")) add("c.bot_version_id = ?", q.get("versionId"));
+  if (q.get("scenario")) add("COALESCE(c.meta->'plan'->>'scenario', '') = ?", q.get("scenario"));
   if (q.get("kind") === "live") where.push("c.source = 'hand-written' AND COALESCE(c.meta->>'kind', 'live') = 'live'");
+  else if (q.get("kind")) add("COALESCE(c.meta->>'kind', CASE c.source WHEN 'hand-written' THEN 'live' ELSE c.source END) = ?", q.get("kind"));
   const rows = await db.query(
     `SELECT c.*, v.version_no, r.label AS run_label, (SELECT count(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count
        FROM conversations c LEFT JOIN bot_versions v ON v.id = c.bot_version_id LEFT JOIN runs r ON r.id = c.run_id
@@ -534,7 +552,7 @@ async function exchange(ctx, conv, userText, userMeta = {}) {
     messages: buildMessages(history, userText, retrieval.passages),
   });
   const latencyMs = Date.now() - started;
-  const cost = await logClaude(db, conv.project_id, reply, conv.source === "hand-written" ? "chat" : "chat (generated interactions)");
+  const cost = await logClaude(db, conv.project_id, reply, conv.source === "hand-written" ? "chat" : conv.source === "real" ? "chat (real users)" : "chat (generated interactions)");
 
   const userMessage = await insertMessage(db, conv.id, history.length, "user", userText, userMeta);
   const botText = reply.refused ? "[The model declined to answer this message.]" : reply.text || "[Empty reply]";
@@ -574,8 +592,12 @@ async function loadPersona(db, id) {
   return row;
 }
 
-async function insertPersona(db, projectId, data) {
-  const persona = sanitisePersona(data);
+async function projectFramework(db, projectId) {
+  return frameworkOf(await loadProject(db, projectId));
+}
+
+async function insertPersona(db, projectId, data, framework) {
+  const persona = sanitisePersona(data, framework ?? (await projectFramework(db, projectId)));
   if (!persona.name) throw new HttpError(400, "Give the persona a name.");
   const id = randomUUID();
   await db.query("INSERT INTO personas (id, project_id, data) VALUES ($1, $2, $3)", [id, projectId, JSON.stringify(persona)]);
@@ -621,16 +643,17 @@ async function generatePersonasRoute({ db, claude }, { id }, body) {
   const brief = requireText(body.brief, "Brief", 2000);
   const count = Math.min(5, Math.max(1, Number(body.count) || 3));
   const passages = await samplePassages(db, id, 4);
-  const result = await generatePersonas(claude, { model: body.model || undefined, brief, count, passages });
+  const framework = await projectFramework(db, id);
+  const result = await generatePersonas(claude, { model: body.model || undefined, brief, count, passages, framework });
   await logClaude(db, id, result, "generate personas");
   const personas = [];
-  for (const p of result.personas) personas.push(await insertPersona(db, id, p));
+  for (const p of result.personas) personas.push(await insertPersona(db, id, { ...p, source: `Generated by AI from the brief: ${brief}` }, framework));
   return { personas };
 }
 
 async function updatePersona({ db }, { id }, body) {
   const row = await loadPersona(db, id);
-  const persona = sanitisePersona({ ...row.data, ...(body.persona ?? body), behaviour: { ...row.data.behaviour, ...(body.persona ?? body).behaviour } });
+  const persona = sanitisePersona({ ...row.data, ...(body.persona ?? body) }, await projectFramework(db, row.project_id));
   if (!persona.name) throw new HttpError(400, "Give the persona a name.");
   await db.query("UPDATE personas SET data = $2, updated_at = now() WHERE id = $1", [id, JSON.stringify(persona)]);
   return { persona: personaOut(await loadPersona(db, id)) };
@@ -689,7 +712,8 @@ async function listRuns({ db }, { id }) {
 const clampInt = (v, min, max, fallback) => Math.min(max, Math.max(min, Math.round(Number(v)) || fallback));
 
 async function createRun({ db }, { id }, body) {
-  await loadProject(db, id);
+  const project = await loadProject(db, id);
+  const framework = frameworkOf(project);
   const kind = body.kind;
   if (kind !== "simulated" && kind !== "questions") throw new HttpError(400, "Unknown kind of run.");
   const version = await loadVersion(db, id, body.botVersionId);
@@ -710,14 +734,19 @@ async function createRun({ db }, { id }, body) {
     const minTurns = clampInt(body.minTurns, 1, 15, 2);
     const maxTurns = clampInt(body.maxTurns, minTurns, 15, Math.max(minTurns, 6));
     const simulatorModel = modelInfo(body.simulatorModel) ? body.simulatorModel : DEFAULT_BOT.model;
-    const settings = { botVersionId: version.id, versionNo: version.version_no, personaIds, count, minTurns, maxTurns, simulatorModel };
+    const s = body.scenarios ?? {};
+    const scenarios = { askHuman: clampInt(s.askHuman, 0, count, 0), giveUp: clampInt(s.giveUp, 0, count, 0), misread: clampInt(s.misread, 0, count, 0) };
+    if (scenarios.askHuman + scenarios.giveUp + scenarios.misread > count) throw new HttpError(400, `The scenarios add up to more than the ${count} conversations in this run.`);
+    if ((scenarios.giveUp || scenarios.misread) && maxTurns < 2) throw new HttpError(400, "Giving up and misreading a reply need conversations of at least 2 user messages. Raise the maximum.");
+    const settings = { botVersionId: version.id, versionNo: version.version_no, personaIds, count, minTurns, maxTurns, simulatorModel, scenarios };
+    const assigned = assignScenarios(count, scenarios);
     const label = String(body.label || `Run ${n}: ${count} simulated conversation${count === 1 ? "" : "s"}, v${version.version_no}`).slice(0, 200);
     await db.query("INSERT INTO runs (id, project_id, kind, label, settings) VALUES ($1, $2, $3, $4, $5)", [runId, id, kind, label, JSON.stringify(settings)]);
     for (let i = 0; i < count; i++) {
       const persona = personas[i % personas.length];
       const meta = {
-        kind: "simulated", status: "pending", persona: persona.data, personaName: persona.data.name,
-        plan: planConversation(persona.data, { minTurns, maxTurns }), simulatorModel,
+        kind: "simulated", status: "pending", persona: persona.data, personaName: persona.data.name, framework,
+        plan: planConversation(assigned[i], { minTurns, maxTurns }), simulatorModel,
       };
       conversations.push({ personaId: persona.id, title: `${persona.data.name} #${Math.floor(i / personas.length) + 1}`, meta });
     }
@@ -775,13 +804,15 @@ async function saveMeta(db, convId, meta) {
 async function finishSimulated(ctx, conv, meta, outcome) {
   const messages = await ctx.db.query("SELECT role, text FROM messages WHERE conversation_id = $1 ORDER BY idx", [conv.id]);
   let rating = null;
+  let rapport = null;
   if (messages.length) {
-    const result = await rateConversation(ctx.claude, { model: meta.simulatorModel, persona: meta.persona, goal: meta.goal || "", messages, outcome });
+    const result = await rateConversation(ctx.claude, { model: meta.simulatorModel, persona: meta.persona, framework: meta.framework, goal: meta.goal || "", messages, outcome });
     await logClaude(ctx.db, conv.project_id, result, "simulated user");
     rating = result.rating;
+    rapport = result.rapport;
   }
   const done = {
-    ...meta, status: "done", outcome, rating,
+    ...meta, status: "done", outcome, rating, ...(rapport ? { rapportPerception: rapport } : {}),
     escalated: outcome === "asked_for_human", abandoned: outcome === "gave_up",
   };
   delete done.finishReason;
@@ -818,14 +849,22 @@ async function simulateStep(ctx, { id }) {
     if (turnNo > plan.turnLimit) return { done: true, meta: await finishSimulated(ctx, conv, meta, "max_turns"), messages: [] };
 
     meta.status = "running";
-    const misunderstand = turnNo > 1 && Math.random() * 100 < (plan.misunderstandPct ?? 0);
+    // misunderstandPct: conversations planned before scenario mixes existed.
+    const misunderstand = plan.misreadAtTurn === turnNo || (turnNo > 1 && Math.random() * 100 < (plan.misunderstandPct ?? 0));
     const passages = turnNo === 1 && !meta.goal ? await samplePassages(db, conv.project_id, 4) : [];
-    const result = await personaTurn(claude, { model: meta.simulatorModel, persona: meta.persona, plan, goal: meta.goal, messages: history, turnNo, misunderstand, passages });
+    const ask = (insist) => personaTurn(claude, { model: meta.simulatorModel, persona: meta.persona, framework: meta.framework, plan, goal: meta.goal, messages: history, turnNo, misunderstand, passages, insist });
+    let result = await ask(false);
     await logClaude(db, conv.project_id, result, "simulated user");
+    const mayEnd = turnNo >= mayEndFrom(plan) && plan.askHumanAtTurn !== turnNo;
+    // The planned scenario must happen: if the simulated user tried to leave too early, ask once more.
+    if (!mayEnd && !String(result.turn.message ?? "").trim()) {
+      result = await ask(true);
+      await logClaude(db, conv.project_id, result, "simulated user");
+    }
     const turn = result.turn;
     if (!meta.goal && turn.goal) meta.goal = String(turn.goal).slice(0, 1000);
     const message = String(turn.message ?? "").trim().slice(0, 4000);
-    const wantsEnd = turn.action === "end" && turnNo > plan.minTurns && plan.askHumanAtTurn !== turnNo;
+    const wantsEnd = turn.action === "end" && mayEnd;
 
     if (wantsEnd && !message) {
       const outcome = turn.end_reason === "gave_up" ? "gave_up" : turn.end_reason === "goal_met" ? "goal_met" : "other";
@@ -860,7 +899,7 @@ async function generateQuestionsRoute({ db, claude }, { id }, body) {
   if (!passages.length) throw new HttpError(400, "Add documents first, so the questions can be based on them.");
   const persona = body.personaId ? (await loadPersona(db, body.personaId)).data : null;
   const avoid = Array.isArray(body.avoid) ? body.avoid.map(String) : [];
-  const result = await generateQuestions(claude, { model: body.model || undefined, count, outOfScopePct, persona, passages, avoid });
+  const result = await generateQuestions(claude, { model: body.model || undefined, count, outOfScopePct, persona, framework: await projectFramework(db, id), passages, avoid });
   await logClaude(db, id, result, "generate questions");
   return { questions: result.questions };
 }
@@ -935,4 +974,224 @@ async function importConversations({ db }, { id }, body) {
   }
   await touch(db, id);
   return { ...summary, runId, preview: undefined };
+}
+
+// ---------- rapport framework and persona import ----------
+
+async function getFramework({ db }, { id }) {
+  const project = await loadProject(db, id);
+  return { framework: frameworkOf(project), isDefault: !project.framework, default: GAAFFE };
+}
+
+async function saveFramework({ db }, { id }, body) {
+  await loadProject(db, id);
+  if (body.reset) {
+    await db.query("UPDATE projects SET framework = NULL, updated_at = now() WHERE id = $1", [id]);
+  } else {
+    const framework = sanitiseFramework(body.framework);
+    await db.query("UPDATE projects SET framework = $2, updated_at = now() WHERE id = $1", [id, JSON.stringify(framework)]);
+  }
+  return getFramework({ db }, { id });
+}
+
+// A spreadsheet with one row per persona (or participant).
+async function importPersonas({ db }, { id }, body) {
+  const framework = await projectFramework(db, id);
+  const rows = await readTableFile({ filename: body.filename, contentBase64: body.contentBase64 });
+  const { personas, mapping, unmapped } = personasFromRows(rows, framework);
+  if (!personas.length) throw new HttpError(400, "No personas found. The file needs a header row and one row per persona.");
+  if (personas.length > 200) throw new HttpError(400, "That is more than 200 personas. Split the file.");
+  const source = `Imported from ${String(body.filename || "a spreadsheet").slice(0, 200)}`;
+  if (body.dryRun) return { count: personas.length, mapping, unmapped, preview: personas.slice(0, 3).map((p) => sanitisePersona(p, framework)) };
+  const saved = [];
+  for (const p of personas) saved.push(await insertPersona(db, id, { ...p, source }, framework));
+  return { count: saved.length };
+}
+
+const MAX_RESEARCH_CHARS = 150_000;
+
+async function researchText(body) {
+  let text;
+  if (body.contentBase64) text = (await extractFromFile(String(body.filename || "research.txt"), Buffer.from(String(body.contentBase64), "base64"))).text;
+  else text = String(body.text ?? "");
+  text = normalise(text);
+  if (text.length < 200) throw new HttpError(400, "There is too little text to draft personas from. Add more research material.");
+  if (text.length > MAX_RESEARCH_CHARS) throw new HttpError(400, `The material is ${Math.round(text.length / 1000)}k characters long; the limit is ${MAX_RESEARCH_CHARS / 1000}k. Split it, or use the most relevant parts.`);
+  return text;
+}
+
+// Step 1: read the research material and find the distinct user types in it.
+async function researchTypes({ db, claude }, { id }, body) {
+  await loadProject(db, id);
+  const text = await researchText(body);
+  const count = body.count ? Math.min(6, Math.max(1, Number(body.count) || 3)) : 0;
+  const result = await identifyUserTypes(claude, { model: body.model || undefined, research: text, count });
+  await logClaude(db, id, result, "draft personas from research");
+  if (!result.types.length) throw new HttpError(422, "No distinct user types could be found in that material.");
+  return { types: result.types, text };
+}
+
+// Step 2: one persona per request, so each stays within the time limit.
+async function researchDraft({ db, claude }, { id }, body) {
+  const framework = await projectFramework(db, id);
+  const text = await researchText(body);
+  const type = { name: requireText(body.type?.name, "User type", 200), summary: String(body.type?.summary ?? "").slice(0, 1000) };
+  const result = await draftPersonaFromResearch(claude, { model: body.model || undefined, research: text, type, framework });
+  await logClaude(db, id, result, "draft personas from research");
+  if (!result.persona) throw new HttpError(502, "The persona could not be drafted. Try again.");
+  const source = `Drafted by AI from ${String(body.sourceLabel || "research material").slice(0, 200)}: check against the data`;
+  const persona = await insertPersona(db, id, { ...result.persona, source }, framework);
+  return { persona, droppedQuotes: result.droppedQuotes };
+}
+
+// ---------- public chat link for real users ----------
+
+const SHARE_DEFAULTS = {
+  enabled: false,
+  botVersionId: null,
+  title: "Chat with our assistant",
+  welcome: "This is a research study about chatbots. Your conversation is saved anonymously for analysis. Please do not share personal details such as your name, address or phone number.",
+  requireConsent: true,
+  consentText: "I have read the information above and agree that this conversation is saved and used for research.",
+  askRating: true,
+  offerHuman: true,
+  humanMessage: "Thank you. In a real service you would now be passed to a member of staff. For this study, the chat ends here.",
+  dailyLimit: 100,
+  maxMessages: 30,
+};
+
+const newToken = () => randomBytes(16).toString("base64url");
+const hashKey = (key) => createHash("sha256").update(String(key)).digest("hex");
+
+function sanitiseShare(input, current = {}) {
+  const s = { ...SHARE_DEFAULTS, ...current, ...input };
+  return {
+    enabled: Boolean(s.enabled),
+    token: current.token || newToken(),
+    botVersionId: s.botVersionId ? String(s.botVersionId) : null,
+    title: String(s.title ?? "").trim().slice(0, 120) || SHARE_DEFAULTS.title,
+    welcome: String(s.welcome ?? "").slice(0, 3000),
+    requireConsent: Boolean(s.requireConsent),
+    consentText: String(s.consentText ?? "").slice(0, 1000),
+    askRating: Boolean(s.askRating),
+    offerHuman: Boolean(s.offerHuman),
+    humanMessage: String(s.humanMessage ?? "").slice(0, 1000),
+    dailyLimit: Math.min(1000, Math.max(1, Math.round(Number(s.dailyLimit)) || 100)),
+    maxMessages: Math.min(100, Math.max(1, Math.round(Number(s.maxMessages)) || 30)),
+  };
+}
+
+async function shareOut(db, project) {
+  const share = project.share ? sanitiseShare({}, project.share) : null;
+  const [{ today }] = await db.query(
+    "SELECT count(*)::int AS today FROM conversations WHERE project_id = $1 AND source = 'real' AND created_at > now() - interval '24 hours'",
+    [project.id],
+  );
+  return { share, defaults: SHARE_DEFAULTS, conversationsLast24h: today };
+}
+
+async function getShare({ db }, { id }) {
+  return shareOut(db, await loadProject(db, id));
+}
+
+async function saveShare({ db }, { id }, body) {
+  const project = await loadProject(db, id);
+  const share = sanitiseShare(body.share ?? body, project.share ?? {});
+  if (share.botVersionId) await loadVersion(db, id, share.botVersionId);
+  await db.query("UPDATE projects SET share = $2, updated_at = now() WHERE id = $1", [id, JSON.stringify(share)]);
+  return shareOut(db, await loadProject(db, id));
+}
+
+// A new link: the old one stops working at once.
+async function newShareLink({ db }, { id }) {
+  const project = await loadProject(db, id);
+  const share = { ...sanitiseShare({}, project.share ?? {}), token: newToken() };
+  await db.query("UPDATE projects SET share = $2, updated_at = now() WHERE id = $1", [id, JSON.stringify(share)]);
+  return shareOut(db, await loadProject(db, id));
+}
+
+const UNAVAILABLE = "This chat is not available right now.";
+
+async function publicRoute(ctx, request, url) {
+  const parts = url.pathname.split("/").filter(Boolean); // api, public, token, …
+  const token = parts[2] ?? "";
+  if (!/^[A-Za-z0-9_-]{10,40}$/.test(token)) throw new HttpError(404, UNAVAILABLE);
+  const [project] = await ctx.db.query("SELECT * FROM projects WHERE share->>'token' = $1", [token]);
+  if (!project?.share?.enabled) throw new HttpError(404, UNAVAILABLE);
+  const share = sanitiseShare({}, project.share);
+  const body = request.method === "POST" ? await readBody(request) : {};
+
+  if (request.method === "GET" && parts.length === 3) {
+    return {
+      title: share.title, welcome: share.welcome, requireConsent: share.requireConsent, consentText: share.consentText,
+      askRating: share.askRating, offerHuman: share.offerHuman, humanMessage: share.humanMessage, maxMessages: share.maxMessages,
+    };
+  }
+  if (request.method === "POST" && parts[3] === "start" && parts.length === 4) return publicStart(ctx, project, share, body);
+  if (request.method === "POST" && parts[3] === "chat" && parts[5] === "messages" && parts.length === 6) return publicMessage(ctx, project, share, parts[4], body);
+  if (request.method === "POST" && parts[3] === "chat" && parts[5] === "end" && parts.length === 6) return publicEnd(ctx, project, parts[4], body);
+  throw new HttpError(404, "Not found.");
+}
+
+async function publicStart({ db }, project, share, body) {
+  if (share.requireConsent && body.consent !== true) throw new HttpError(400, "Please tick the box to agree before starting.");
+  const [{ today }] = await db.query(
+    "SELECT count(*)::int AS today FROM conversations WHERE project_id = $1 AND source = 'real' AND created_at > now() - interval '24 hours'",
+    [project.id],
+  );
+  if (today >= share.dailyLimit) throw new HttpError(429, "This chat has reached its limit for today. Please try again tomorrow.");
+  let version;
+  try {
+    version = await loadVersion(db, project.id, share.botVersionId);
+  } catch {
+    throw new HttpError(404, UNAVAILABLE);
+  }
+  const key = randomBytes(24).toString("base64url");
+  const convId = randomUUID();
+  const [{ n }] = await db.query("SELECT count(*)::int + 1 AS n FROM conversations WHERE project_id = $1 AND source = 'real'", [project.id]);
+  const meta = { kind: "real", status: "open", keyHash: hashKey(key), ...(share.requireConsent ? { consentAt: new Date().toISOString(), consentText: share.consentText } : {}) };
+  await db.query(
+    "INSERT INTO conversations (id, project_id, bot_version_id, source, title, meta) VALUES ($1, $2, $3, $4, $5, $6)",
+    [convId, project.id, version.id, "real", `Participant ${n}`, JSON.stringify(meta)],
+  );
+  await touch(db, project.id);
+  return { conversationId: convId, key };
+}
+
+async function loadParticipantConversation(db, project, convId, key) {
+  if (!/^[0-9a-f-]{36}$/.test(convId)) throw new HttpError(404, "Not found.");
+  const conv = await loadConversation(db, convId);
+  if (conv.project_id !== project.id || conv.source !== "real" || !conv.meta?.keyHash || !sameText(conv.meta.keyHash, hashKey(key ?? ""))) {
+    throw new HttpError(403, "This conversation cannot be continued here. Please reload the page to start again.");
+  }
+  return conv;
+}
+
+async function publicMessage(ctx, project, share, convId, body) {
+  const conv = await loadParticipantConversation(ctx.db, project, convId, body.key);
+  if (conv.meta.endedAt) throw new HttpError(400, "This chat has ended.");
+  const text = requireText(body.text, "Message", 2000);
+  const [{ sent }] = await ctx.db.query("SELECT count(*)::int AS sent FROM messages WHERE conversation_id = $1 AND role = 'user'", [convId]);
+  if (sent >= share.maxMessages) throw new HttpError(400, "This chat has reached its maximum length. Please end the chat.");
+  const [, reply] = await exchange(ctx, conv, text, { participant: true });
+  return { reply: reply.text, remaining: share.maxMessages - sent - 1 };
+}
+
+// reason: "finished" (End chat) or "human" (Talk to a person). A rating can follow in a second call.
+async function publicEnd({ db }, project, convId, body) {
+  const conv = await loadParticipantConversation(db, project, convId, body.key);
+  const meta = { ...conv.meta };
+  if (!meta.endedAt) {
+    meta.endedAt = new Date().toISOString();
+    meta.status = "done";
+    meta.outcome = body.reason === "human" ? "asked_for_human" : "finished";
+    meta.escalated = body.reason === "human";
+  }
+  const score = Number(body.rating);
+  if (!meta.rating && Number.isInteger(score) && score >= 1 && score <= 5) {
+    meta.rating = { score, comment: String(body.comment ?? "").trim().slice(0, 1000) };
+    delete meta.ratingSkipped;
+  } else if (!meta.rating && body.skipRating) meta.ratingSkipped = true;
+  await saveMeta(db, convId, meta);
+  return { ok: true };
 }

@@ -1,25 +1,62 @@
 // Simulated users: an AI plays a persona talking to the chatbot, one turn at a time.
-// Behaviour that researchers need to control (giving up, asking for a human,
-// misunderstanding) is decided here in code and recorded, so it is known
-// ground truth rather than something the AI may or may not do.
+// Personas describe who the user is. What a run should cover (conversations where
+// the user asks for a human, gives up, or misreads a reply) is a test-design choice:
+// the researcher sets a scenario mix per run, and each conversation's scenario is
+// decided here in code and recorded, so it is known ground truth rather than
+// something the AI may or may not do.
 
 import { personaProfile } from "./personas.js";
+import { IMPORTANCE, frameworkText } from "./framework.js";
+
+export const SCENARIOS = {
+  normal: "normal",
+  asks_for_human: "asks for a human",
+  gives_up: "gives up partway",
+  misreads: "misreads a reply",
+};
 
 export function randomInt(min, max, rng = Math.random) {
   return min + Math.floor(rng() * (max - min + 1));
 }
 
+// counts: { askHuman, giveUp, misread }; the rest of the conversations are normal.
+// Returns one scenario per conversation, shuffled so they are spread across personas.
+export function assignScenarios(total, counts = {}, rng = Math.random) {
+  const list = [
+    ...Array(counts.askHuman ?? 0).fill("asks_for_human"),
+    ...Array(counts.giveUp ?? 0).fill("gives_up"),
+    ...Array(counts.misread ?? 0).fill("misreads"),
+  ];
+  while (list.length < total) list.push("normal");
+  for (let i = list.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [list[i], list[j]] = [list[j], list[i]];
+  }
+  return list.slice(0, total);
+}
+
 // Decides up front how a simulated conversation will go. The simulated user ends
-// the conversation when they are done, but never before minTurns and never after
-// maxTurns user messages.
-export function planConversation(persona, { minTurns, maxTurns }, rng = Math.random) {
+// the conversation when they are done, but never before minTurns user messages,
+// never before the planned scenario has happened, and never after maxTurns.
+export function planConversation(scenario, { minTurns, maxTurns }, rng = Math.random) {
   const turnLimit = maxTurns;
-  const b = persona.behaviour ?? {};
-  const plan = { turnLimit, minTurns, giveUpAtTurn: null, askHumanAtTurn: null, misunderstandPct: b.misunderstandPct ?? 0 };
+  const plan = { scenario, turnLimit, minTurns, giveUpAtTurn: null, askHumanAtTurn: null, misreadAtTurn: null };
   // Giving up means leaving before writing user message n (n >= 2), without a word.
-  if (turnLimit >= 2 && rng() * 100 < (b.giveUpPct ?? 0)) plan.giveUpAtTurn = randomInt(2, turnLimit, rng);
-  else if (rng() * 100 < (b.askHumanPct ?? 0)) plan.askHumanAtTurn = randomInt(1, turnLimit, rng);
+  if (scenario === "gives_up") plan.giveUpAtTurn = randomInt(2, Math.max(2, turnLimit), rng);
+  if (scenario === "asks_for_human") plan.askHumanAtTurn = randomInt(1, turnLimit, rng);
+  // Misreading needs a bot reply to misread, so it happens in message 2 or later.
+  if (scenario === "misreads") plan.misreadAtTurn = randomInt(2, Math.max(2, turnLimit), rng);
   return plan;
+}
+
+// The first user message at which the simulated user may choose to end.
+export function mayEndFrom(plan) {
+  return Math.max(
+    (plan.minTurns ?? 1) + 1,
+    plan.askHumanAtTurn ?? 0,
+    plan.giveUpAtTurn ?? 0,
+    plan.misreadAtTurn ? plan.misreadAtTurn + 1 : 0,
+  );
 }
 
 function transcriptText(messages) {
@@ -49,7 +86,7 @@ You only ever write the user's messages, never the chatbot's. Do not mention tha
 Real users rarely write long, perfectly structured messages; match the persona instead.`;
 
 // Writes the persona's next message (or decides to end). turnNo counts user messages, from 1.
-export async function personaTurn(claude, { model, effort = "low", persona, plan, goal, messages, turnNo, misunderstand, passages }) {
+export async function personaTurn(claude, { model, effort = "low", persona, framework, plan, goal, messages, turnNo, misunderstand, passages, insist = false }) {
   const instructions = [];
   if (turnNo === 1) {
     instructions.push(goal
@@ -59,28 +96,54 @@ export async function personaTurn(claude, { model, effort = "low", persona, plan
   } else {
     instructions.push(`Your goal: ${goal}`);
     instructions.push(`Write the user's message number ${turnNo}, responding to the chatbot's last reply.`);
-    if (turnNo <= plan.minTurns) instructions.push("Do not end the conversation yet: set action to \"send\".");
+    if (turnNo < mayEndFrom(plan)) instructions.push("Do not end the conversation yet: set action to \"send\".");
     else instructions.push("If your goal has been met, or you have nothing more to ask, you may end: set action to \"end\" and end_reason to \"goal_met\" (with a short closing message such as thanks, or an empty message if this person would just leave). Otherwise set action to \"send\".");
   }
   if (plan.askHumanAtTurn === turnNo) instructions.push("In this message, ask to speak to a human (a real person or member of staff), in this persona's own words. Set action to \"send\".");
   if (misunderstand) instructions.push("In this message, misunderstand or misread something in the chatbot's last reply, the way this persona plausibly might, and respond based on that misunderstanding. Do not say that you misunderstood.");
+  if (insist) instructions.push("Important: the user does not leave yet. Write a real next message (not empty) and set action to \"send\".");
+  if (persona.rapport && Object.keys(persona.rapport).length) {
+    instructions.push("React to the chatbot's behaviour in line with this persona's rapport needs: when the chatbot meets or ignores a need that matters to them, show it the way this person would (for example warmer, more trusting, more curt, pushing back, or disengaging). Do not name the dimensions.");
+  }
   instructions.push("Keep \"goal\" the same once chosen.");
 
-  const prompt = `PERSONA\n${personaProfile(persona)}\n\nCONVERSATION SO FAR\n${transcriptText(messages)}\n\nINSTRUCTIONS\n${instructions.join("\n")}`;
+  const prompt = `PERSONA\n${personaProfile(persona, framework)}\n\nCONVERSATION SO FAR\n${transcriptText(messages)}\n\nINSTRUCTIONS\n${instructions.join("\n")}`;
   const result = await claude.complete({ model, effort, system: SIMULATOR_SYSTEM, messages: [{ role: "user", content: prompt }], maxTokens: 1500, schema: TURN_SCHEMA });
   if (result.refused || !result.json) return { ...result, turn: { goal: goal || "", action: "end", message: "", end_reason: "other" } };
   return { ...result, turn: result.json };
 }
 
-const RATING_SCHEMA = {
-  type: "object",
-  properties: {
-    score: { type: "integer", enum: [1, 2, 3, 4, 5] },
-    comment: { type: "string", description: "One or two sentences, in the persona's own voice." },
-  },
-  required: ["score", "comment"],
-  additionalProperties: false,
-};
+// The rating schema adds one 1-5 perception per rapport dimension when a framework is in use.
+function ratingSchema(framework) {
+  const dims = framework?.dimensions ?? [];
+  const schema = {
+    type: "object",
+    properties: {
+      score: { type: "integer", enum: [1, 2, 3, 4, 5] },
+      comment: { type: "string", description: "One or two sentences, in the persona's own voice." },
+    },
+    required: ["score", "comment"],
+    additionalProperties: false,
+  };
+  if (dims.length) {
+    schema.properties.rapport = {
+      type: "object",
+      properties: Object.fromEntries(dims.map((d) => [d.key, {
+        type: "object",
+        properties: {
+          score: { type: "integer", enum: [1, 2, 3, 4, 5] },
+          comment: { type: "string", description: `In the persona's own voice: how they experienced ${d.name}.` },
+        },
+        required: ["score", "comment"],
+        additionalProperties: false,
+      }])),
+      required: dims.map((d) => d.key),
+      additionalProperties: false,
+    };
+    schema.required.push("rapport");
+  }
+  return schema;
+}
 
 const OUTCOME_TEXT = {
   goal_met: "You ended the conversation because you got what you needed (or had nothing more to ask).",
@@ -90,11 +153,17 @@ const OUTCOME_TEXT = {
   other: "The conversation ended.",
 };
 
-// The end-of-chat satisfaction rating (CSAT, 1 to 5), given in character.
-export async function rateConversation(claude, { model, effort = "low", persona, goal, messages, outcome }) {
-  const prompt = `PERSONA\n${personaProfile(persona)}\n\nYOUR GOAL\n${goal}\n\nCONVERSATION\n${transcriptText(messages)}\n\nHOW IT ENDED\n${OUTCOME_TEXT[outcome] ?? OUTCOME_TEXT.other}\n\nThe service now asks: "How satisfied were you with this conversation?" (1 = very dissatisfied, 5 = very satisfied). Answer as this persona honestly would, with a score and a short comment.`;
-  const result = await claude.complete({ model, effort, system: SIMULATOR_SYSTEM, messages: [{ role: "user", content: prompt }], maxTokens: 600, schema: RATING_SCHEMA });
-  return { ...result, rating: result.json ?? null };
+// The end-of-chat satisfaction rating (CSAT, 1 to 5), given in character, plus, when the
+// project uses a rapport framework, the persona's perception of each dimension.
+export async function rateConversation(claude, { model, effort = "low", persona, framework, goal, messages, outcome }) {
+  const dims = framework?.dimensions ?? [];
+  const rapportAsk = dims.length
+    ? `\n\nThen, for each of these aspects of rapport, say how this persona experienced the chatbot (1 = it clearly undermined this, 3 = neutral or mixed, 5 = it clearly supported this), with a short comment in their own voice. Base this on what actually happened in the conversation and on what matters to this persona.\n${dims.map((d) => `- ${d.key}: ${d.name}. ${d.definition}`).join("\n")}`
+    : "";
+  const prompt = `PERSONA\n${personaProfile(persona, framework)}\n\nYOUR GOAL\n${goal}\n\nCONVERSATION\n${transcriptText(messages)}\n\nHOW IT ENDED\n${OUTCOME_TEXT[outcome] ?? OUTCOME_TEXT.other}\n\nThe service now asks: "How satisfied were you with this conversation?" (1 = very dissatisfied, 5 = very satisfied). Answer as this persona honestly would, with a score and a short comment.${rapportAsk}`;
+  const result = await claude.complete({ model, effort, system: SIMULATOR_SYSTEM, messages: [{ role: "user", content: prompt }], maxTokens: dims.length ? 1500 : 600, schema: ratingSchema(framework) });
+  const json = result.json ?? null;
+  return { ...result, rating: json ? { score: json.score, comment: json.comment } : null, rapport: json?.rapport ?? null };
 }
 
 const QUESTIONS_SCHEMA = {
@@ -117,13 +186,13 @@ const QUESTIONS_SCHEMA = {
   additionalProperties: false,
 };
 
-export async function generateQuestions(claude, { model, effort = "low", count, outOfScopePct, persona, passages, avoid = [] }) {
+export async function generateQuestions(claude, { model, effort = "low", count, outOfScopePct, persona, framework, passages, avoid = [] }) {
   const outOfScope = Math.round((count * outOfScopePct) / 100);
   const prompt = [
     `Write ${count} different questions or requests that real users might send to a chatbot whose knowledge base includes the excerpts below.`,
     `${count - outOfScope} should be answerable from the excerpts (in_scope true) and ${outOfScope} should be plausible for this chatbot's users but NOT answerable from them (in_scope false).`,
     "Vary the topics, wording, length and difficulty. Write them as users actually type: not every one is a neat, complete question.",
-    persona ? `Write them all as this persona would:\n${personaProfile(persona)}` : "Write them as a mix of different kinds of users would.",
+    persona ? `Write them all as this persona would:\n${personaProfile(persona, framework)}` : "Write them as a mix of different kinds of users would.",
     avoid.length ? `Do not repeat these existing questions:\n${avoid.slice(-60).map((q) => `- ${q}`).join("\n")}` : "",
     `Knowledge base excerpts:\n${excerpts(passages)}`,
   ].filter(Boolean).join("\n\n");
@@ -131,48 +200,112 @@ export async function generateQuestions(claude, { model, effort = "low", count, 
   return { ...result, questions: (result.json?.questions ?? []).map((q) => ({ text: String(q.text).trim(), inScope: Boolean(q.in_scope) })).filter((q) => q.text) };
 }
 
-const PERSONAS_SCHEMA = {
-  type: "object",
-  properties: {
-    personas: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          name: { type: "string", description: "A short label, e.g. 'Retired teacher with hearing loss'." },
-          description: { type: "string" },
-          goal: { type: "string", description: "Empty unless the brief implies a specific goal." },
-          communication_style: { type: "string" },
-          language_background: { type: "string" },
-          give_up_pct: { type: "integer", description: "0 to 100: chance this person leaves a conversation early." },
-          ask_human_pct: { type: "integer", description: "0 to 100: chance they ask for a human." },
-          misunderstand_pct: { type: "integer", description: "0 to 100: chance per message that they misread a reply." },
-          adversarial: { type: "boolean" },
-        },
-        required: ["name", "description", "goal", "communication_style", "language_background", "give_up_pct", "ask_human_pct", "misunderstand_pct", "adversarial"],
-        additionalProperties: false,
-      },
+// A persona's descriptive fields, plus a rapport profile for the project's framework.
+function personaItemSchema(framework, { evidence = false } = {}) {
+  const dims = framework?.dimensions ?? [];
+  const item = {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "A short label, e.g. 'Retired teacher with hearing loss'." },
+      description: { type: "string" },
+      goal: { type: "string", description: "Empty unless the source implies a specific goal." },
+      communication_style: { type: "string" },
+      language_background: { type: "string" },
+      adversarial: { type: "boolean" },
     },
-  },
-  required: ["personas"],
-  additionalProperties: false,
-};
+    required: ["name", "description", "goal", "communication_style", "language_background", "adversarial"],
+    additionalProperties: false,
+  };
+  if (dims.length) {
+    const dimProps = {
+      importance: { type: "string", enum: [...IMPORTANCE, "unclear"], description: "How much this aspect of rapport matters to this user." },
+      note: { type: "string", description: "What this user needs or reacts to on this dimension, in one or two sentences." },
+    };
+    if (evidence) dimProps.evidence = { type: "array", items: { type: "string" }, description: "Up to 3 short quotes copied word for word from the research material that support this. Empty if there is no direct evidence." };
+    item.properties.rapport = {
+      type: "object",
+      properties: Object.fromEntries(dims.map((d) => [d.key, { type: "object", properties: dimProps, required: Object.keys(dimProps), additionalProperties: false }])),
+      required: dims.map((d) => d.key),
+      additionalProperties: false,
+    };
+    item.required.push("rapport");
+  }
+  return item;
+}
 
-export async function generatePersonas(claude, { model, effort = "low", brief, count, passages }) {
-  const prompt = [
-    `Create ${count} distinct user personas for testing a chatbot, following this brief from a conversation designer:\n"${brief}"`,
-    "Make them specific and realistic, and different from each other in background, needs and communication style. Avoid stereotypes.",
-    passages.length ? `The chatbot's knowledge base includes excerpts like these, which shows what it is for:\n${excerpts(passages)}` : "",
-  ].filter(Boolean).join("\n\n");
-  const result = await claude.complete({ model, effort, system: "You help conversation designers create user personas for chatbot testing.", messages: [{ role: "user", content: prompt }], maxTokens: 4000, schema: PERSONAS_SCHEMA });
-  const personas = (result.json?.personas ?? []).map((p) => ({
+function personaFromJson(p) {
+  return {
     name: p.name,
     description: p.description,
     goal: p.goal,
     communicationStyle: p.communication_style,
     languageBackground: p.language_background,
-    behaviour: { giveUpPct: p.give_up_pct, askHumanPct: p.ask_human_pct, misunderstandPct: p.misunderstand_pct },
     adversarial: p.adversarial,
-  }));
-  return { ...result, personas };
+    rapport: Object.fromEntries(Object.entries(p.rapport ?? {}).map(([k, v]) => [k, { importance: v.importance === "unclear" ? "" : v.importance, note: v.note, ...(v.evidence ? { evidence: v.evidence } : {}) }])),
+  };
+}
+
+const PERSONA_SYSTEM = "You help conversation designers and researchers create user personas for chatbot testing.";
+
+function frameworkBlock(framework) {
+  return framework?.dimensions?.length
+    ? `Describe each persona's rapport needs using this framework (${framework.name}):\n${frameworkText(framework)}`
+    : "";
+}
+
+export async function generatePersonas(claude, { model, effort = "low", brief, count, passages, framework }) {
+  const prompt = [
+    `Create ${count} distinct user personas for testing a chatbot, following this brief from a conversation designer:\n"${brief}"`,
+    "Make them specific and realistic, and different from each other in background, needs and communication style. Avoid stereotypes.",
+    frameworkBlock(framework),
+    passages.length ? `The chatbot's knowledge base includes excerpts like these, which shows what it is for:\n${excerpts(passages)}` : "",
+  ].filter(Boolean).join("\n\n");
+  const schema = { type: "object", properties: { personas: { type: "array", items: personaItemSchema(framework) } }, required: ["personas"], additionalProperties: false };
+  const result = await claude.complete({ model, effort, system: PERSONA_SYSTEM, messages: [{ role: "user", content: prompt }], maxTokens: 6000, schema });
+  return { ...result, personas: (result.json?.personas ?? []).map(personaFromJson) };
+}
+
+// Step 1 of drafting personas from user research: find the distinct user types.
+export async function identifyUserTypes(claude, { model, effort = "low", research, count }) {
+  const prompt = [
+    `Below is user research material (for example interview transcripts, notes or survey comments). Identify ${count ? `the ${count} most distinct` : "the distinct (at most 6)"} types of user it describes, based on their needs, circumstances and attitudes, so that each can become a persona.`,
+    "Only use what the material supports. Give each a short name and a one-sentence summary.",
+    `RESEARCH MATERIAL\n${research}`,
+  ].join("\n\n");
+  const schema = {
+    type: "object",
+    properties: { types: { type: "array", items: { type: "object", properties: { name: { type: "string" }, summary: { type: "string" } }, required: ["name", "summary"], additionalProperties: false } } },
+    required: ["types"],
+    additionalProperties: false,
+  };
+  const result = await claude.complete({ model, effort, system: PERSONA_SYSTEM, messages: [{ role: "user", content: prompt }], maxTokens: 1500, schema });
+  return { ...result, types: (result.json?.types ?? []).slice(0, count || 6) };
+}
+
+const squash = (t) => String(t).toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, " ").trim();
+
+// Step 2: one full persona for one user type, with quotes as evidence. Quotes that do
+// not appear word for word in the material are dropped, so every quote can be trusted.
+export async function draftPersonaFromResearch(claude, { model, effort = "low", research, type, framework }) {
+  const prompt = [
+    `Write a persona for this type of user, based only on the research material below:\n${type.name}: ${type.summary}`,
+    "Fill in what the material supports; where it says nothing, keep the field short or mark importance as \"unclear\". Do not invent facts about real participants.",
+    frameworkBlock(framework),
+    `RESEARCH MATERIAL\n${research}`,
+  ].filter(Boolean).join("\n\n");
+  const result = await claude.complete({ model, effort, system: PERSONA_SYSTEM, messages: [{ role: "user", content: prompt }], maxTokens: 3000, schema: personaItemSchema(framework, { evidence: true }) });
+  if (!result.json) return { ...result, persona: null, droppedQuotes: 0 };
+  const persona = personaFromJson(result.json);
+  const haystack = squash(research);
+  let droppedQuotes = 0;
+  for (const entry of Object.values(persona.rapport)) {
+    if (!entry.evidence) continue;
+    const kept = entry.evidence.filter((q) => {
+      const quote = squash(q).replace(/^["']|["']$/g, "").replace(/^\.\.\.|\.\.\.$/g, "").trim();
+      return quote.length >= 4 && haystack.includes(quote);
+    });
+    droppedQuotes += entry.evidence.length - kept.length;
+    entry.evidence = kept;
+  }
+  return { ...result, persona, droppedQuotes };
 }

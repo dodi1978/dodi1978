@@ -10,17 +10,33 @@ const OUTCOME_LABELS = {
   asked_for_human: ["asked for a human", "warn"],
   max_turns: ["hit the turn limit", ""],
   other: ["ended", ""],
+  finished: ["ended by user", "ok"],
 };
 
+// Every interaction has one type. Real users are set apart from everything created in the workbench.
+const TYPES = [
+  ["real", "Real users", "real user"],
+  ["simulated", "Simulated", "simulated"],
+  ["single_question", "Test questions", "test question"],
+  ["live", "Test chats", "test chat"],
+  ["written", "Written", "written"],
+  ["imported", "Imported", "imported"],
+];
+
+function kindOf(c) {
+  return c.meta?.kind ?? (c.source === "hand-written" ? "live" : c.source);
+}
+
 function kindLabel(c) {
-  const kind = c.meta?.kind;
-  if (kind === "single_question") return "test question";
-  if (kind === "written") return "written";
-  if (kind === "live") return "live test chat";
-  return SOURCE_LABELS[c.source] ?? c.source;
+  return TYPES.find(([k]) => k === kindOf(c))?.[2] ?? SOURCE_LABELS[c.source] ?? c.source;
+}
+
+function kindBadge(c) {
+  return h("span", { class: `badge kind kind-${kindOf(c)}` }, kindLabel(c));
 }
 
 function statusBadge(meta = {}) {
+  if (meta.kind === "real" && !meta.endedAt) return h("span", { class: "badge", title: "The participant did not press End chat." }, "not ended");
   if (meta.status === "pending") return h("span", { class: "badge" }, "not run yet");
   if (meta.status === "running") return h("span", { class: "badge accent" }, "in progress");
   if (meta.status === "failed") return h("span", { class: "badge danger", title: meta.error || "" }, "failed");
@@ -28,8 +44,28 @@ function statusBadge(meta = {}) {
   return label ? h("span", { class: `badge ${kind}` }, label) : null;
 }
 
-function behaviourLine(b = {}) {
-  return `gives up ${b.giveUpPct ?? 0}% · asks for a human ${b.askHumanPct ?? 0}% · misreads ${b.misunderstandPct ?? 0}% of replies`;
+const SCENARIO_LABELS = { normal: "normal", asks_for_human: "asks for a human", gives_up: "gives up partway", misreads: "misreads a reply" };
+
+// Personas made before scenario mixes existed carried percentages; show them for old conversations only.
+function legacyBehaviourLine(b) {
+  if (!b) return null;
+  return `older setting: gives up ${b.giveUpPct ?? 0}% · asks for a human ${b.askHumanPct ?? 0}% · misreads ${b.misunderstandPct ?? 0}% of replies`;
+}
+
+function scenarioBadge(plan) {
+  if (!plan?.scenario || plan.scenario === "normal") return null;
+  return h("span", { class: "badge accent" }, SCENARIO_LABELS[plan.scenario] ?? plan.scenario);
+}
+
+function scenarioText(plan) {
+  if (!plan) return null;
+  const parts = [`${plan.minTurns}–${plan.turnLimit} user messages`];
+  if (plan.scenario === "normal") parts.unshift("normal (no planned event)");
+  if (plan.giveUpAtTurn) parts.push(`gives up before writing message ${plan.giveUpAtTurn}`);
+  if (plan.askHumanAtTurn) parts.push(`asks for a human in message ${plan.askHumanAtTurn}`);
+  if (plan.misreadAtTurn) parts.push(`misreads the bot's reply in message ${plan.misreadAtTurn}`);
+  if (plan.misunderstandPct) parts.push(`older setting: ${plan.misunderstandPct}% chance of misreading each reply`);
+  return parts.join(" · ");
 }
 
 // ---------- running batches of generated conversations ----------
@@ -114,21 +150,42 @@ async function runWithProgress(container, ids, after) {
 
 // ---------- personas ----------
 
-function personaForm(persona = {}, onSave) {
-  const b = persona.behaviour ?? { giveUpPct: 10, askHumanPct: 10, misunderstandPct: 10 };
+const IMPORTANCE_LABELS = { "": "Not stated", low: "Low", medium: "Medium", high: "High" };
+
+function rapportFields(framework, rapport = {}) {
+  const rows = framework.dimensions.map((d) => {
+    const current = rapport[d.key] ?? {};
+    const importance = h("select", { id: `pr-${d.key}-imp`, "aria-label": `${d.name}: importance` },
+      Object.entries(IMPORTANCE_LABELS).map(([v, l]) => h("option", { value: v, selected: (current.importance ?? "") === v }, l)));
+    const note = h("input", { id: `pr-${d.key}-note`, value: current.note ?? "", placeholder: "What this user needs or reacts to", "aria-label": `${d.name}: note` });
+    const evidence = current.evidence?.length
+      ? h("details", { class: "evidence" }, h("summary", {}, plural(current.evidence.length, "supporting quote")), h("ul", {}, current.evidence.map((q) => h("li", {}, `“${q}”`))))
+      : null;
+    return { key: d.key, importance, note, evidence: current.evidence, el: h("div", { class: "rapport-row" },
+      h("div", {}, h("strong", {}, d.name), d.definition ? h("div", { class: "hint" }, d.definition) : null),
+      importance, h("div", {}, note, evidence)) };
+  });
+  return {
+    el: h("fieldset", { class: "field plain" },
+      h("legend", {}, `Rapport needs (${framework.name})`),
+      h("p", { class: "hint", style: "margin-top:0" }, "How much each dimension matters to this user, and what they need. Simulated users react to the bot in line with these, and rate each dimension at the end."),
+      h("div", { class: "rapport-grid" }, rows.map((r) => r.el))),
+    value: () => Object.fromEntries(rows.map((r) => [r.key, { importance: r.importance.value, note: r.note.value, ...(r.evidence ? { evidence: r.evidence } : {}) }])),
+  };
+}
+
+function personaForm(persona = {}, framework, onSave) {
   const f = {
     name: h("input", { id: "pf-name", value: persona.name ?? "", maxlength: 120, required: true }),
     description: h("textarea", { id: "pf-desc", rows: 3 }, persona.description ?? ""),
     goal: h("textarea", { id: "pf-goal", rows: 2 }, persona.goal ?? ""),
     communicationStyle: h("textarea", { id: "pf-style", rows: 2 }, persona.communicationStyle ?? ""),
     languageBackground: h("input", { id: "pf-lang", value: persona.languageBackground ?? "" }),
-    giveUpPct: h("input", { id: "pf-giveup", type: "number", min: 0, max: 100, value: b.giveUpPct }),
-    askHumanPct: h("input", { id: "pf-human", type: "number", min: 0, max: 100, value: b.askHumanPct }),
-    misunderstandPct: h("input", { id: "pf-mis", type: "number", min: 0, max: 100, value: b.misunderstandPct }),
     adversarial: h("input", { id: "pf-adv", type: "checkbox", checked: Boolean(persona.adversarial), style: "width:auto" }),
   };
+  const rapport = framework.dimensions.length ? rapportFields(framework, persona.rapport) : null;
   const save = h("button", { class: "primary", type: "submit" }, "Save persona");
-  const dialog = h("dialog", {});
+  const dialog = h("dialog", { class: "wide" });
   const form = h("form", { onsubmit: async (e) => {
     e.preventDefault();
     const done = busy(save, "Saving…");
@@ -136,8 +193,7 @@ function personaForm(persona = {}, onSave) {
       await onSave({
         name: f.name.value, description: f.description.value, goal: f.goal.value,
         communicationStyle: f.communicationStyle.value, languageBackground: f.languageBackground.value,
-        behaviour: { giveUpPct: Number(f.giveUpPct.value), askHumanPct: Number(f.askHumanPct.value), misunderstandPct: Number(f.misunderstandPct.value) },
-        adversarial: f.adversarial.checked,
+        adversarial: f.adversarial.checked, rapport: rapport ? rapport.value() : {},
       });
       dialog.close();
     } catch (err) {
@@ -147,20 +203,17 @@ function personaForm(persona = {}, onSave) {
     }
   } },
     h("h2", {}, persona.id ? "Edit persona" : "New persona"),
+    persona.source ? h("p", { class: "notice" }, persona.source) : null,
     h("div", { class: "field" }, h("label", { for: "pf-name" }, "Name"), f.name),
     h("div", { class: "field" }, h("label", { for: "pf-desc" }, "Who they are"), f.description),
     h("div", { class: "field" }, h("label", { for: "pf-goal" }, "Goal (optional)"), f.goal,
       h("div", { class: "hint" }, "Leave empty and each conversation picks a realistic goal from your documents, so conversations vary.")),
-    h("div", { class: "field" }, h("label", { for: "pf-style" }, "How they write"), f.communicationStyle),
-    h("div", { class: "field" }, h("label", { for: "pf-lang" }, "Language background"), f.languageBackground),
-    h("fieldset", { class: "field plain" },
-      h("legend", {}, "Behaviour in simulated conversations"),
-      h("div", { class: "grid-3" },
-        h("div", {}, h("label", { for: "pf-giveup" }, "Gives up (%)"), f.giveUpPct, h("div", { class: "hint" }, "Chance of leaving without finishing.")),
-        h("div", {}, h("label", { for: "pf-human" }, "Asks for a human (%)"), f.askHumanPct, h("div", { class: "hint" }, "Chance of asking for a person.")),
-        h("div", {}, h("label", { for: "pf-mis" }, "Misreads replies (%)"), f.misunderstandPct, h("div", { class: "hint" }, "Chance per message."))),
-      h("p", { class: "hint" }, "These are applied exactly and recorded with each conversation, so you know which conversations were meant to end in giving up or asking for a human.")),
+    h("div", { class: "grid-2" },
+      h("div", { class: "field" }, h("label", { for: "pf-style" }, "How they write"), f.communicationStyle),
+      h("div", { class: "field" }, h("label", { for: "pf-lang" }, "Language background"), f.languageBackground)),
+    rapport?.el,
     h("div", { class: "field row" }, f.adversarial, h("label", { for: "pf-adv", style: "margin:0" }, "Adversarial (tries to break the bot)")),
+    h("p", { class: "hint" }, "What happens in a simulated conversation (for example the user asking for a human) is set per run, under Interactions → Simulate conversations."),
     h("div", { class: "row end" }, h("button", { type: "button", onclick: () => dialog.close() }, "Cancel"), save),
   );
   dialog.append(form);
@@ -170,8 +223,221 @@ function personaForm(persona = {}, onSave) {
   f.name.focus();
 }
 
+function rapportSummary(p, framework) {
+  const set = framework.dimensions.filter((d) => p.rapport?.[d.key]?.importance || p.rapport?.[d.key]?.note);
+  if (!set.length) return null;
+  return h("div", {},
+    h("div", { class: "chips" }, set.map((d) => {
+      const r = p.rapport[d.key];
+      return h("span", { class: `chip imp-${r.importance || "none"}`, title: r.note || "" }, `${d.name}${r.importance ? ` · ${r.importance}` : ""}`);
+    })),
+    h("details", { class: "small" }, h("summary", {}, "Rapport needs in detail"),
+      h("dl", { class: "rapport-detail" }, set.flatMap((d) => {
+        const r = p.rapport[d.key];
+        return [h("dt", {}, `${d.name}${r.importance ? ` (${r.importance})` : ""}`),
+          h("dd", {}, r.note || h("span", { class: "muted" }, "No note."), r.evidence?.length ? h("ul", { class: "quotes" }, r.evidence.map((q) => h("li", {}, `“${q}”`))) : null)];
+      }))));
+}
+
+// ---------- the rapport framework editor ----------
+
+function frameworkCard(projectId, data, reload) {
+  const { framework, isDefault } = data;
+  const name = h("input", { id: "fw-name", value: framework.name });
+  const list = h("div", { class: "fw-list" });
+  const addDimension = (d = { name: "", definition: "", builds: [], breaks: [] }) => {
+    const block = h("div", { class: "fw-dim", "data-key": d.key ?? "" },
+      h("div", { class: "row" },
+        h("input", { class: "fw-dim-name", value: d.name, placeholder: "Dimension name", "aria-label": "Dimension name", style: "flex:1;min-width:160px;font-weight:600" }),
+        h("button", { type: "button", class: "link-button danger", onclick: () => block.remove() }, "Remove")),
+      h("textarea", { class: "fw-def", rows: 2, placeholder: "Definition", "aria-label": "Definition" }, d.definition),
+      h("div", { class: "grid-2" },
+        h("div", {}, h("label", { class: "small" }, "Builds rapport (one per line)"), h("textarea", { class: "fw-builds", rows: 4 }, d.builds.join("\n"))),
+        h("div", {}, h("label", { class: "small" }, "Breaks rapport (one per line)"), h("textarea", { class: "fw-breaks", rows: 4 }, d.breaks.join("\n")))));
+    list.append(block);
+  };
+  framework.dimensions.forEach(addDimension);
+  const save = h("button", { class: "primary", type: "submit" }, "Save framework");
+  return h("details", { class: "card framework-card" },
+    h("summary", {}, h("strong", {}, "Rapport framework: "), framework.name, ` (${plural(framework.dimensions.length, "dimension")})`, isDefault ? h("span", { class: "badge", style: "margin-left:0.5rem" }, "default") : h("span", { class: "badge accent", style: "margin-left:0.5rem" }, "edited for this project")),
+    h("form", { onsubmit: async (e) => {
+      e.preventDefault();
+      const dimensions = [...list.querySelectorAll(".fw-dim")].map((b) => ({
+        key: b.dataset.key || undefined,
+        name: b.querySelector(".fw-dim-name").value,
+        definition: b.querySelector(".fw-def").value,
+        builds: b.querySelector(".fw-builds").value,
+        breaks: b.querySelector(".fw-breaks").value,
+      }));
+      const done = busy(save, "Saving…");
+      try {
+        await api("PUT", `/api/projects/${projectId}/framework`, { framework: { name: name.value, dimensions } });
+        toast("Framework saved.");
+        reload();
+      } catch (err) {
+        fail(err);
+        done();
+      }
+    } },
+      h("p", { class: "muted", style: "margin-top:0.8rem" }, "Personas in this project are described with these dimensions, and simulated users rate each one at the end of a conversation. Renaming a dimension keeps what personas say about it; removing one drops it from personas when they are next saved. Conversations keep the framework they were run with."),
+      h("div", { class: "field" }, h("label", { for: "fw-name" }, "Framework name"), name),
+      list,
+      h("div", { class: "row", style: "margin-top:0.8rem" },
+        save,
+        h("button", { type: "button", onclick: () => addDimension() }, "+ Add dimension"),
+        isDefault ? null : h("button", { type: "button", class: "link-button", onclick: async () => {
+          if (!(await confirmDialog("Go back to the default GAAFFE taxonomy for this project?", "Reset"))) return;
+          try {
+            await api("PUT", `/api/projects/${projectId}/framework`, { reset: true });
+            reload();
+          } catch (err) {
+            fail(err);
+          }
+        } }, "Reset to the GAAFFE taxonomy"))));
+}
+
+// ---------- importing personas ----------
+
+function csvCell(v) {
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+function downloadTemplate(framework) {
+  const header = ["Name", "Description", "Goal", "Communication style", "Language background",
+    ...framework.dimensions.flatMap((d) => [`${d.name} importance`, `${d.name} note`, `${d.name} evidence`])];
+  const example = ["Participant 1", "Retired nurse who lives alone", "", "Formal, full sentences", "English",
+    ...framework.dimensions.flatMap((d, i) => [["high", "medium", "low"][i % 3], "", ""])];
+  const blob = new Blob([`${header.map(csvCell).join(",")}\n${example.map(csvCell).join(",")}\n`], { type: "text/csv" });
+  const a = h("a", { href: URL.createObjectURL(blob), download: "persona-template.csv" });
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+
+function spreadsheetImport(projectId, framework, reload) {
+  const file = h("input", { type: "file", id: "pi-file", accept: ".csv,.xlsx" });
+  const result = h("div");
+  const check = h("button", { type: "submit" }, "Preview");
+  let payload = null;
+  return h("form", { onsubmit: async (e) => {
+    e.preventDefault();
+    const f = file.files[0];
+    if (!f) return toast("Choose a file first.", "error");
+    const done = busy(check, "Reading…");
+    try {
+      payload = { filename: f.name, contentBase64: await fileToBase64(f) };
+      const preview = await api("POST", `/api/projects/${projectId}/personas/import`, { ...payload, dryRun: true });
+      const go = h("button", { class: "primary", type: "button", onclick: async () => {
+        const finish = busy(go, "Importing…");
+        try {
+          const { count } = await api("POST", `/api/projects/${projectId}/personas/import`, payload);
+          toast(`Imported ${plural(count, "persona")}.`);
+          reload();
+        } catch (err) {
+          fail(err);
+          finish();
+        }
+      } }, `Import ${plural(preview.count, "persona")}`);
+      fill(result,
+        h("div", { class: "notice" }, `Found ${plural(preview.count, "persona")}.`),
+        h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Column in your file"), h("th", {}, "Used as"))),
+          h("tbody", {}, Object.entries(preview.mapping).map(([col, use]) => h("tr", {}, h("td", {}, col), h("td", {}, use)))))),
+        preview.unmapped.length ? h("p", { class: "notice warn" }, `Not used (no matching field): ${preview.unmapped.join(", ")}. Rename these columns if they should be included.`) : null,
+        h("p", { class: "small muted" }, `First ${plural(preview.preview.length, "persona")}:`),
+        preview.preview.map((p) => h("div", { class: "card persona-card compact" }, h("strong", {}, p.name), p.description ? h("p", { class: "small" }, p.description) : null, rapportSummary(p, framework))),
+        h("div", { class: "row" }, go));
+    } catch (err) {
+      fail(err);
+    } finally {
+      done();
+    }
+  } },
+    h("p", { class: "muted" }, "One row per persona or participant. Columns are matched by name: Name, Description, Goal, Communication style, Language background, and for each dimension either one column (for example “Autonomy”, holding a level or a note) or separate “Autonomy importance”, “Autonomy note” and “Autonomy evidence” columns. Levels can be words (low, medium, high) or numbers on any scale."),
+    h("div", { class: "row" }, h("button", { type: "button", class: "link-button", onclick: () => downloadTemplate(framework) }, "Download a template (CSV)")),
+    h("div", { class: "field" }, h("label", { for: "pi-file" }, "File (CSV or Excel)"), file),
+    check,
+    h("div", { style: "margin-top:1rem" }, result));
+}
+
+function researchImport(projectId, framework, reload) {
+  let mode = "file";
+  const file = h("input", { type: "file", id: "pr-file", accept: ".txt,.md,.docx,.pdf" });
+  const text = h("textarea", { id: "pr-text", rows: 10, placeholder: "Paste interview transcripts, research notes or survey comments." });
+  const count = h("select", { id: "pr-count" }, h("option", { value: "" }, "Let the AI decide (up to 6)"), [1, 2, 3, 4, 5, 6].map((n) => h("option", { value: n }, n)));
+  const holder = h("div");
+  const panes = {
+    file: h("div", { class: "field" }, h("label", { for: "pr-file" }, "File"), file, h("div", { class: "hint" }, "Text, Word (.docx), PDF or Markdown, up to 4 MB and 150,000 characters.")),
+    paste: h("div", { class: "field" }, h("label", { for: "pr-text" }, "Research material"), text),
+  };
+  fill(holder, panes.file);
+  const modes = [["file", "Upload a file"], ["paste", "Paste text"]].map(([key, label]) => h("button", { type: "button", "data-key": key, "aria-pressed": String(key === mode), onclick: () => {
+    mode = key;
+    modes.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === key)));
+    fill(holder, panes[key]);
+  } }, label));
+  const result = h("div");
+  const find = h("button", { type: "submit" }, "Find user types");
+  return h("form", { onsubmit: async (e) => {
+    e.preventDefault();
+    const done = busy(find, "Reading the material…");
+    try {
+      let body;
+      let sourceLabel;
+      if (mode === "file") {
+        const f = file.files[0];
+        if (!f) throw new Error("Choose a file first.");
+        body = { filename: f.name, contentBase64: await fileToBase64(f) };
+        sourceLabel = f.name;
+      } else {
+        body = { text: text.value };
+        sourceLabel = "pasted research material";
+      }
+      const { types, text: material } = await api("POST", `/api/projects/${projectId}/personas/research/types`, { ...body, count: count.value || undefined });
+      const boxes = types.map((t, i) => h("input", { type: "checkbox", id: `rt-${i}`, checked: true, style: "width:auto" }));
+      const draft = h("button", { class: "primary", type: "button", onclick: async () => {
+        const chosen = types.filter((_, i) => boxes[i].checked);
+        if (!chosen.length) return toast("Tick at least one user type.", "error");
+        let made = 0;
+        let dropped = 0;
+        draft.disabled = true;
+        for (const type of chosen) {
+          draft.textContent = `Drafting ${made + 1} of ${chosen.length}…`;
+          try {
+            const r = await api("POST", `/api/projects/${projectId}/personas/research/draft`, { text: material, type, sourceLabel });
+            made++;
+            dropped += r.droppedQuotes;
+          } catch (err) {
+            fail(err);
+          }
+        }
+        toast(`Drafted ${plural(made, "persona")}.${dropped ? ` ${plural(dropped, "quote")} that could not be found word for word in your material ${dropped === 1 ? "was" : "were"} left out.` : ""} Check them against your data.`);
+        reload();
+      } }, "Draft these personas");
+      fill(result,
+        h("p", {}, "The AI found these user types. Tick the ones to turn into personas; each is drafted with your framework and supporting quotes."),
+        h("div", { class: "type-list" }, types.map((t, i) => h("label", { class: "check type", for: `rt-${i}` }, boxes[i], h("span", {}, h("strong", {}, t.name), h("br"), h("span", { class: "small muted" }, t.summary))))),
+        h("div", { class: "row", style: "margin-top:0.6rem" }, draft));
+    } catch (err) {
+      fail(err);
+    } finally {
+      done();
+    }
+  } },
+    h("p", { class: "muted" }, "The AI reads your research material, finds the distinct types of user in it, and drafts a persona for each, described with your rapport framework. Each dimension can carry supporting quotes; quotes that do not appear word for word in your material are removed automatically. Drafts are labelled as AI drafts for you to check."),
+    h("p", { class: "notice warn small" }, "Research material is sent to Claude (Anthropic's API) for this. Remove names and other identifying details first, in line with your ethics approval."),
+    h("div", { class: "segmented", role: "group", "aria-label": "How to add material" }, modes),
+    holder,
+    h("div", { class: "field" }, h("label", { for: "pr-count" }, "How many personas"), count),
+    find,
+    h("div", { style: "margin-top:1rem" }, result));
+}
+
 export async function personasTab(body, projectId) {
-  const { personas } = await api("GET", `/api/projects/${projectId}/personas`);
+  const [{ personas }, fw] = await Promise.all([
+    api("GET", `/api/projects/${projectId}/personas`),
+    api("GET", `/api/projects/${projectId}/framework`),
+  ]);
+  const framework = fw.framework;
   const reload = () => personasTab(body, projectId).catch(fail);
 
   const starter = h("button", { onclick: async () => {
@@ -186,10 +452,11 @@ export async function personasTab(body, projectId) {
     }
   } }, "Add starter set");
 
+  // Ways to add personas beyond writing one: generate, spreadsheet, research text.
   const brief = h("input", { id: "gen-brief", placeholder: "e.g. older adults applying for a bus pass, with mixed digital skills" });
   const genCount = h("select", { id: "gen-count", "aria-label": "How many" }, [1, 2, 3, 4, 5].map((n) => h("option", { value: n, selected: n === 3 }, n)));
   const genButton = h("button", { type: "submit" }, "Generate");
-  const generate = h("form", { class: "card", onsubmit: async (e) => {
+  const generate = h("form", { onsubmit: async (e) => {
     e.preventDefault();
     const done = busy(genButton, "Generating…");
     try {
@@ -201,20 +468,39 @@ export async function personasTab(body, projectId) {
       done();
     }
   } },
-    h("h2", {}, "Generate personas with AI"),
-    h("p", { class: "muted" }, "Describe the kind of users you need. The AI drafts personas for you to check and edit."),
+    h("p", { class: "muted" }, "Describe the kind of users you need. The AI drafts personas, including their rapport needs, for you to check and edit."),
     h("div", { class: "row" }, h("div", { style: "flex:1;min-width:220px" }, h("label", { for: "gen-brief" }, "Brief"), brief), h("div", {}, h("label", { for: "gen-count" }, "How many"), genCount)),
     h("div", { class: "row", style: "margin-top:0.6rem" }, genButton));
 
+  const adders = {
+    generate: ["Generate from a brief", () => generate],
+    spreadsheet: ["Import a spreadsheet", () => spreadsheetImport(projectId, framework, reload)],
+    research: ["Draft from research text", () => researchImport(projectId, framework, reload)],
+  };
+  let current = sessionStorageGet("cdw-persona-adder") || "generate";
+  if (!adders[current]) current = "generate";
+  const adderHolder = h("div");
+  const adderButtons = Object.entries(adders).map(([key, [label]]) => h("button", { type: "button", "data-key": key, onclick: () => showAdder(key) }, label));
+  const showAdder = (key) => {
+    current = key;
+    sessionStorageSet("cdw-persona-adder", key);
+    adderButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === key)));
+    fill(adderHolder, adders[key][1]());
+  };
+  showAdder(current);
+
   const cards = personas.map((p) => h("div", { class: "card persona-card" },
-    h("div", { class: "row" }, h("strong", {}, p.name), p.adversarial ? h("span", { class: "badge danger" }, "adversarial") : null, h("span", { class: "spacer" }), h("span", { class: "small muted" }, plural(p.conversationCount, "conversation"))),
+    h("div", { class: "row" }, h("strong", {}, p.name), p.adversarial ? h("span", { class: "badge danger" }, "adversarial") : null,
+      p.source?.startsWith("Drafted by AI") || p.source?.startsWith("Generated by AI") ? h("span", { class: "badge warn", title: p.source }, "AI draft") : null,
+      p.source?.startsWith("Imported") ? h("span", { class: "badge", title: p.source }, "imported") : null,
+      h("span", { class: "spacer" }), h("span", { class: "small muted" }, plural(p.conversationCount, "conversation"))),
     p.description ? h("p", { style: "margin:0.4rem 0" }, p.description) : null,
     p.goal ? h("p", { class: "small" }, h("strong", {}, "Goal: "), p.goal) : null,
     p.communicationStyle ? h("p", { class: "small" }, h("strong", {}, "Writes: "), p.communicationStyle) : null,
     p.languageBackground ? h("p", { class: "small" }, h("strong", {}, "Language: "), p.languageBackground) : null,
-    h("p", { class: "small muted" }, behaviourLine(p.behaviour)),
+    rapportSummary(p, framework),
     h("div", { class: "row" },
-      h("button", { onclick: () => personaForm(p, async (data) => { await api("PATCH", `/api/personas/${p.id}`, data); toast("Persona saved."); reload(); }) }, "Edit"),
+      h("button", { onclick: () => personaForm(p, framework, async (data) => { await api("PATCH", `/api/personas/${p.id}`, data); toast("Persona saved."); reload(); }) }, "Edit"),
       h("button", { onclick: async () => { try { await api("POST", `/api/personas/${p.id}/duplicate`); reload(); } catch (err) { fail(err); } } }, "Duplicate"),
       h("button", { class: "link-button danger", onclick: async () => {
         if (!(await confirmDialog(`Delete the persona “${p.name}”? Conversations already run with it keep a copy of it.`))) return;
@@ -230,11 +516,12 @@ export async function personasTab(body, projectId) {
   fill(body,
     h("div", { class: "card" },
       h("h2", {}, "Personas"),
-      h("p", { class: "muted" }, "Personas are the simulated users who talk to your bot. Write your own, start from the starter set (which includes two adversarial ones), or generate some with AI."),
+      h("p", { class: "muted" }, "Personas are the simulated users who talk to your bot. Write your own, start from the starter set (which includes two adversarial ones), generate some with AI, or import them from your user research."),
       h("div", { class: "row" },
-        h("button", { class: "primary", onclick: () => personaForm({}, async (data) => { await api("POST", `/api/projects/${projectId}/personas`, data); toast("Persona created."); reload(); }) }, "New persona"),
+        h("button", { class: "primary", onclick: () => personaForm({}, framework, async (data) => { await api("POST", `/api/projects/${projectId}/personas`, data); toast("Persona created."); reload(); }) }, "New persona"),
         starter)),
-    generate,
+    frameworkCard(projectId, fw, reload),
+    h("div", { class: "card" }, h("h2", {}, "Add personas"), h("div", { class: "segmented wrap", role: "group", "aria-label": "How to add personas" }, adderButtons), adderHolder),
     personas.length ? h("div", { class: "persona-grid" }, cards) : h("div", { class: "card empty" }, "No personas yet."),
   );
 }
@@ -255,6 +542,22 @@ function simulatePanel(ctx) {
   const maxTurns = h("input", { id: "sim-max", type: "number", min: 1, max: 15, value: 6 });
   const model = h("select", { id: "sim-model" }, state.session.models.map((m) => h("option", { value: m.id }, m.label)));
   const label = h("input", { id: "sim-label", placeholder: "Optional, e.g. Pilot run – warm tone" });
+  const scen = {
+    askHuman: h("input", { id: "sc-human", type: "number", min: 0, max: 100, value: 0 }),
+    giveUp: h("input", { id: "sc-giveup", type: "number", min: 0, max: 100, value: 0 }),
+    misread: h("input", { id: "sc-misread", type: "number", min: 0, max: 100, value: 0 }),
+  };
+  const normal = h("strong");
+  const mixNote = h("span", { class: "small" });
+  const updateMix = () => {
+    const total = Math.max(0, Number(count.value) || 0);
+    const planned = Object.values(scen).reduce((n, el) => n + Math.max(0, Number(el.value) || 0), 0);
+    normal.textContent = String(Math.max(0, total - planned));
+    mixNote.textContent = planned > total ? ` The scenarios add up to more than ${total} conversations.` : "";
+    mixNote.className = planned > total ? "small danger-text" : "small";
+  };
+  [count, ...Object.values(scen)].forEach((el) => el.addEventListener("input", updateMix));
+  updateMix();
   const start = h("button", { class: "primary", type: "submit" }, "Run simulation");
   return h("form", { onsubmit: async (e) => {
     e.preventDefault();
@@ -264,6 +567,7 @@ function simulatePanel(ctx) {
       const { conversationIds } = await api("POST", `/api/projects/${projectId}/runs`, {
         kind: "simulated", botVersionId: version.value, personaIds, count: Number(count.value),
         minTurns: Number(minTurns.value), maxTurns: Number(maxTurns.value), simulatorModel: model.value, label: label.value,
+        scenarios: { askHuman: Number(scen.askHuman.value), giveUp: Number(scen.giveUp.value), misread: Number(scen.misread.value) },
       });
       done();
       await runWithProgress(area, conversationIds, refresh);
@@ -283,6 +587,13 @@ function simulatePanel(ctx) {
       h("div", { class: "field" }, h("label", { for: "sim-min" }, "At least (user messages)"), minTurns),
       h("div", { class: "field" }, h("label", { for: "sim-max" }, "At most (user messages)"), maxTurns),
       h("div", { class: "field" }, h("label", { for: "sim-label" }, "Run name"), label)),
+    h("fieldset", { class: "field plain" }, h("legend", {}, "Scenario mix"),
+      h("p", { class: "hint", style: "margin-top:0" }, "How many of the conversations should include each event. They are spread at random across the personas, and the moment each happens is chosen at random within the conversation. Each conversation is recorded with its scenario, so you can later check whether your evals spot them."),
+      h("div", { class: "grid-4" },
+        h("div", {}, h("label", { for: "sc-human" }, "User asks for a human"), scen.askHuman),
+        h("div", {}, h("label", { for: "sc-giveup" }, "User gives up partway"), scen.giveUp, h("div", { class: "hint" }, "Leaves without a word.")),
+        h("div", {}, h("label", { for: "sc-misread" }, "User misreads a reply"), scen.misread),
+        h("div", {}, h("label", {}, "Normal conversations"), h("div", { class: "mix-normal" }, normal), mixNote))),
     h("p", { class: "hint" }, "Each user message takes two AI calls (the user, then your bot), plus one for the satisfaction rating at the end. Watch the cost on the Overview page; you can stop a run at any time and continue it later."),
     start);
 }
@@ -471,17 +782,14 @@ function importPanel(ctx) {
 
 // ---------- interactions page ----------
 
-export async function interactionsTab(body, projectId, _overview, extra = []) {
-  if (extra[0]) return conversationDetail(body, projectId, extra[0]);
-  const params = new URLSearchParams(location.hash.split("?")[1] || "");
-  const query = new URLSearchParams([...params].filter(([, v]) => v));
-  const [{ conversations }, { runs }, { personas }, { versions }] = await Promise.all([
-    api("GET", `/api/projects/${projectId}/conversations?${query}`),
+// The "Simulated interactions" tab: the four ways of creating interactions, and their runs.
+export async function createTab(body, projectId) {
+  const [{ runs }, { personas }, { versions }] = await Promise.all([
     api("GET", `/api/projects/${projectId}/runs`),
     api("GET", `/api/projects/${projectId}/personas`),
     api("GET", `/api/projects/${projectId}/bot`),
   ]);
-  const refresh = () => interactionsTab(body, projectId, _overview, extra).catch(fail);
+  const refresh = () => createTab(body, projectId).catch(fail);
   const area = h("div");
   const ctx = { projectId, versions, personas, refresh, area };
 
@@ -497,7 +805,9 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
     fill(panelHolder, makers[key][1](ctx));
   };
   const makerButtons = Object.entries(makers).map(([key, [name]]) => h("button", { type: "button", "data-key": key, onclick: () => showMaker(key) }, name));
-  const createCard = h("div", { class: "card" }, h("h2", {}, "Create interactions"), h("div", { class: "segmented wrap", role: "group", "aria-label": "How to create" }, makerButtons), panelHolder);
+  const createCard = h("div", { class: "card" },
+    h("p", { class: "muted", style: "margin-top:0" }, "Choose how to create interactions. Everything created here is collected under Interactions, together with test chats and conversations with real users."),
+    h("div", { class: "segmented wrap", role: "group", "aria-label": "How to create" }, makerButtons), panelHolder);
   showMaker(current);
 
   // Runs
@@ -517,9 +827,28 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
           fail(err);
         }
       } }, "Delete")))));
-  const runsCard = runs.length ? h("div", { class: "card" }, h("h2", {}, "Runs and imports"), h("div", { class: "table-wrap" }, h("table", {},
-    h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Kind"), h("th", {}, "Progress"), h("th", {}, "Started"), h("th", {}, ""))),
-    h("tbody", {}, runRows)))) : null;
+  const runsCard = runs.length ? h("div", { class: "card" }, h("h2", {}, "Runs and imports"),
+    h("p", { class: "small muted" }, "Click a run to see its conversations under Interactions."),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Kind"), h("th", {}, "Progress"), h("th", {}, "Started"), h("th", {}, ""))),
+      h("tbody", {}, runRows)))) : null;
+
+  fill(body, createCard, area, runsCard);
+}
+
+// The "Interactions" tab: everything collected, from every source, with filters.
+export async function interactionsTab(body, projectId, _overview, extra = []) {
+  if (extra[0]) return conversationDetail(body, projectId, extra[0]);
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  const query = new URLSearchParams([...params].filter(([, v]) => v));
+  const [{ conversations }, all, { runs }, { personas }, { versions }] = await Promise.all([
+    api("GET", `/api/projects/${projectId}/conversations?${query}`),
+    query.toString() ? api("GET", `/api/projects/${projectId}/conversations`) : null,
+    api("GET", `/api/projects/${projectId}/runs`),
+    api("GET", `/api/projects/${projectId}/personas`),
+    api("GET", `/api/projects/${projectId}/bot`),
+  ]);
+  const everything = all?.conversations ?? conversations;
 
   // Filters and list
   const setFilter = (key, value) => {
@@ -531,29 +860,46 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
   const filterSelect = (key, label, options) => h("div", { class: "field" }, h("label", { for: `f-${key}` }, label),
     h("select", { id: `f-${key}`, onchange: (e) => setFilter(key, e.target.value) }, h("option", { value: "" }, "All"), options.map(([v, l]) => h("option", { value: v, selected: params.get(key) === v }, l))));
   const filters = h("div", { class: "grid-4 filters" },
-    filterSelect("source", "Source", [["simulated", "simulated"], ["hand-written", "hand-written"], ["imported", "imported"]]),
+    filterSelect("kind", "Type", TYPES.map(([k, l]) => [k, l])),
     filterSelect("personaId", "Persona", personas.map((p) => [p.id, p.name])),
     filterSelect("versionId", "Bot version", versions.map((v) => [v.id, `v${v.versionNo}${v.label ? ` – ${v.label}` : ""}`])),
-    filterSelect("runId", "Run", runs.map((r) => [r.id, r.label])));
+    filterSelect("runId", "Run", runs.map((r) => [r.id, r.label])),
+    filterSelect("scenario", "Scenario", Object.entries(SCENARIO_LABELS)));
   const rows = conversations.map((c) => h("tr", { class: "clickable", onclick: () => (location.hash = `#/p/${projectId}/interactions/${c.id}`) },
     h("td", {}, h("a", { href: `#/p/${projectId}/interactions/${c.id}`, onclick: (e) => e.stopPropagation() }, c.title || "(untitled)")),
-    h("td", {}, h("span", { class: "badge" }, kindLabel(c))),
+    h("td", {}, kindBadge(c)),
     h("td", { class: "small" }, c.meta?.personaName ?? ""),
     h("td", { class: "small" }, c.versionNo ? `v${c.versionNo}` : ""),
     h("td", { class: "small" }, c.messageCount),
+    h("td", {}, scenarioBadge(c.meta?.plan)),
     h("td", {}, statusBadge(c.meta)),
     h("td", { class: "small" }, c.meta?.rating ? `${c.meta.rating.score}/5` : ""),
     h("td", { class: "small" }, when(c.createdAt))));
+  // Counts per type, which double as a quick filter.
+  const counts = Object.fromEntries(TYPES.map(([k]) => [k, everything.filter((c) => kindOf(c) === k).length]));
+  const created = everything.length - counts.real;
+  const chip = (key, label, n, extraClass = "") => h("button", {
+    type: "button", class: `type-chip ${extraClass} ${(params.get("kind") || "") === key ? "active" : ""}`, "aria-pressed": String((params.get("kind") || "") === key),
+    onclick: () => setFilter("kind", key),
+  }, label, h("span", { class: "count" }, n));
+  const summary = h("div", { class: "type-summary" },
+    chip("", "All", everything.length),
+    h("span", { class: "type-group" }, chip("real", "Real users", counts.real, "kind-real")),
+    h("span", { class: "type-group created" },
+      h("span", { class: "group-label" }, `Created in the workbench (${created})`),
+      TYPES.slice(1).map(([k, l]) => chip(k, l, counts[k], `kind-${k}`))));
+
   const listCard = h("div", { class: "card" },
     h("div", { class: "row" }, h("h2", { style: "margin:0" }, `Interactions (${conversations.length})`), h("span", { class: "spacer" }), query.toString() ? h("a", { href: `#/p/${projectId}/interactions` }, "Clear filters") : null),
+    summary,
     filters,
     conversations.length
       ? h("div", { class: "table-wrap" }, h("table", {},
-          h("thead", {}, h("tr", {}, h("th", {}, "Title"), h("th", {}, "Source"), h("th", {}, "Persona"), h("th", {}, "Bot"), h("th", {}, "Messages"), h("th", {}, "Outcome"), h("th", {}, "Rating"), h("th", {}, "Created"))),
+          h("thead", {}, h("tr", {}, h("th", {}, "Title"), h("th", {}, "Type"), h("th", {}, "Persona"), h("th", {}, "Bot"), h("th", {}, "Messages"), h("th", {}, "Scenario"), h("th", {}, "Outcome"), h("th", {}, "Rating"), h("th", {}, "Created"))),
           h("tbody", {}, rows)))
-      : h("p", { class: "empty" }, query.toString() ? "No interactions match these filters." : "No interactions yet. Create some above."));
+      : h("p", { class: "empty" }, query.toString() ? "No interactions match these filters." : "No interactions yet. Create some under Create interactions, chat in Test chat, or share the chat link with real users."));
 
-  fill(body, createCard, area, runsCard, listCard);
+  fill(body, listCard);
 }
 
 function sessionStorageGet(key) {
@@ -576,7 +922,7 @@ async function conversationDetail(body, projectId, conversationId) {
   const meta = c.meta ?? {};
   const facts = [];
   const fact = (label, value) => value !== undefined && value !== null && value !== "" && facts.push(h("div", { class: "fact" }, h("div", { class: "label" }, label), h("div", {}, value)));
-  fact("Source", kindLabel(c));
+  fact("Type", kindBadge(c));
   fact("Persona", meta.personaName);
   fact("Bot version", c.versionNo ? `v${c.versionNo}${settings?.model ? ` · ${settings.model}` : ""}` : null);
   fact("Run", c.runLabel);
@@ -584,13 +930,27 @@ async function conversationDetail(body, projectId, conversationId) {
   fact("Question", meta.kind === "single_question" ? (meta.inScope === true ? "answerable from the documents" : meta.inScope === false ? "not answerable from the documents" : "your own question") : null);
   fact("Outcome", statusBadge(meta));
   if (meta.rating) fact("Satisfaction (CSAT)", h("span", {}, h("strong", {}, `${meta.rating.score}/5`), ` “${meta.rating.comment}”`));
-  if (meta.plan) fact("Planned behaviour", [
-    `${meta.plan.minTurns}–${meta.plan.turnLimit} user messages`,
-    meta.plan.giveUpAtTurn ? `gives up before message ${meta.plan.giveUpAtTurn}` : null,
-    meta.plan.askHumanAtTurn ? `asks for a human in message ${meta.plan.askHumanAtTurn}` : null,
-    meta.plan.misunderstandPct ? `${meta.plan.misunderstandPct}% chance of misreading each reply` : null,
-  ].filter(Boolean).join(" · "));
+  const dims = meta.framework?.dimensions ?? [];
+  const perception = meta.rapportPerception && dims.length
+    ? h("div", { class: "perception" },
+        h("h3", {}, "Rapport as the simulated user experienced it"),
+        h("div", { class: "table-wrap" }, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", {}, "Dimension"), h("th", {}, "Need"), h("th", {}, "Score (1–5)"), h("th", {}, "In their words"))),
+          h("tbody", {}, dims.filter((d) => meta.rapportPerception[d.key]).map((d) => {
+            const r = meta.rapportPerception[d.key];
+            const need = meta.persona?.rapport?.[d.key]?.importance;
+            return h("tr", {}, h("td", {}, h("strong", {}, d.name)), h("td", { class: "small" }, need || "–"),
+              h("td", {}, h("span", { class: `score s${r.score}` }, r.score)), h("td", { class: "small" }, `“${r.comment}”`));
+          })))),
+        h("p", { class: "hint" }, `Framework: ${meta.framework.name}. These are the simulated user's own perceptions, not an evaluation.`))
+    : null;
+  if (meta.plan) fact("Scenario (planned)", scenarioText(meta.plan));
   fact("Note", meta.note);
+  if (meta.kind === "real") {
+    fact("Consent", meta.consentAt ? `given ${when(meta.consentAt)}` : "no consent screen");
+    fact("Ended", meta.endedAt ? when(meta.endedAt) : "not ended (the participant left without pressing End chat)");
+    if (meta.ratingSkipped) fact("Satisfaction (CSAT)", "skipped by the participant");
+  }
   if (meta.error) fact("Last error", h("span", { class: "badge danger" }, meta.error));
 
   const transcript = messages.map((m) => {
@@ -617,8 +977,10 @@ async function conversationDetail(body, projectId, conversationId) {
           }
         } }, "Delete")),
       h("div", { class: "facts" }, facts),
+      perception,
       meta.persona ? h("details", {}, h("summary", {}, "Persona as used in this conversation"),
-        h("div", { class: "rules" }, [meta.persona.description, meta.persona.communicationStyle && `Writes: ${meta.persona.communicationStyle}`, meta.persona.languageBackground && `Language: ${meta.persona.languageBackground}`, behaviourLine(meta.persona.behaviour)].filter(Boolean).join("\n"))) : null),
+        h("div", { class: "rules" }, [meta.persona.description, meta.persona.communicationStyle && `Writes: ${meta.persona.communicationStyle}`, meta.persona.languageBackground && `Language: ${meta.persona.languageBackground}`, legacyBehaviourLine(meta.persona.behaviour),
+          ...dims.filter((d) => meta.persona.rapport?.[d.key]).map((d) => `${d.name}: ${meta.persona.rapport[d.key].importance || "importance not stated"}${meta.persona.rapport[d.key].note ? ` – ${meta.persona.rapport[d.key].note}` : ""}`)].filter(Boolean).join("\n"))) : null),
     h("div", { class: "card chat-pane" }, h("div", { class: "chat-log tall" }, transcript.length ? transcript : h("p", { class: "empty" }, "No messages yet."))),
   );
 }
