@@ -1,5 +1,7 @@
 // Conversation Design Workbench: browser side. Plain JavaScript, no build step.
 
+import { renderMarkdown } from "./markdown.js";
+
 const app = document.getElementById("app");
 const crumbs = document.getElementById("crumbs");
 const logoutButton = document.getElementById("logout");
@@ -642,13 +644,22 @@ function messageView(m) {
   if (meta.model && meta.requestedModel && meta.model !== meta.requestedModel) badges.push(h("span", { class: "badge warn", title: "A safety check moved this request to another model." }, `answered by ${meta.model}`));
   if (meta.searchWarning) badges.push(h("span", { class: "badge warn", title: meta.searchWarning }, "keyword fallback"));
   const passages = meta.passages || [];
+  const bubble = h("div", { class: "bubble formatted" }, renderMarkdown(m.text));
+  let raw = false;
+  const toggle = h("button", { class: "link-button small", type: "button", title: "Switch between formatted text and the exact text the model wrote", onclick: () => {
+    raw = !raw;
+    bubble.className = raw ? "bubble" : "bubble formatted";
+    fill(bubble, raw ? m.text : renderMarkdown(m.text));
+    toggle.textContent = raw ? "Show formatted" : "Show raw text";
+  } }, "Show raw text");
   return h("div", { class: "msg assistant" },
-    h("div", { class: "bubble" }, m.text),
+    bubble,
     h("div", { class: "details" },
       ...badges,
       meta.searchMode ? h("span", {}, `${meta.searchMode === "meaning" ? "meaning" : "keyword"} search`) : null,
       meta.latencyMs ? h("span", {}, `${(meta.latencyMs / 1000).toFixed(1)} s`) : null,
-      meta.costUsd !== undefined ? h("span", {}, money(meta.costUsd)) : null),
+      meta.costUsd !== undefined ? h("span", {}, money(meta.costUsd)) : null,
+      /[*_#`>]|^\s*\d+[.)]\s/m.test(m.text) ? toggle : null),
     h("details", {},
       h("summary", {}, `Passages given to the bot (${passages.length})`),
       passages.length ? passages.map(passageView) : h("p", { class: "small muted" }, "No passages matched this message.")));
