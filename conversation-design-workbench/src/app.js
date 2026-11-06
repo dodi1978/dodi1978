@@ -8,6 +8,9 @@ import { toPgVector } from "./embeddings.js";
 import { claudeCost, voyageCost, MODELS, EFFORTS, modelInfo } from "./pricing.js";
 import { DEFAULT_BOT, sanitiseSettings, retrieve, buildSystemPrompt, buildMessages, groundingRules } from "./rag.js";
 import { logUsage, projectUsage } from "./usage.js";
+import { STARTER_PERSONAS, sanitisePersona } from "./personas.js";
+import { planConversation, personaTurn, rateConversation, generateQuestions, generatePersonas } from "./simulate.js";
+import { parseImport } from "./importer.js";
 
 const COOKIE = "cdw_session";
 const EMBED_BATCH = 48;
@@ -82,6 +85,20 @@ function routes() {
     ["PATCH", "/api/conversations/:id", updateConversation],
     ["DELETE", "/api/conversations/:id", deleteConversation],
     ["POST", "/api/conversations/:id/messages", sendMessage],
+    ["GET", "/api/projects/:id/personas", listPersonas],
+    ["POST", "/api/projects/:id/personas", createPersona],
+    ["POST", "/api/projects/:id/personas/starter", addStarterPersonas],
+    ["POST", "/api/projects/:id/personas/generate", generatePersonasRoute],
+    ["PATCH", "/api/personas/:id", updatePersona],
+    ["DELETE", "/api/personas/:id", deletePersona],
+    ["POST", "/api/personas/:id/duplicate", duplicatePersona],
+    ["GET", "/api/projects/:id/runs", listRuns],
+    ["POST", "/api/projects/:id/runs", createRun],
+    ["DELETE", "/api/runs/:id", deleteRun],
+    ["POST", "/api/conversations/:id/step", simulateStep],
+    ["POST", "/api/projects/:id/questions/generate", generateQuestionsRoute],
+    ["POST", "/api/projects/:id/conversations/written", createWrittenConversation],
+    ["POST", "/api/projects/:id/import", importConversations],
   ].map(([method, pattern, handler]) => {
     const names = [];
     const regex = new RegExp(`^${pattern.replace(/:(\w+)/g, (_, n) => (names.push(n), "([^/]+)"))}$`);
@@ -255,6 +272,10 @@ async function duplicateProject({ db }, { id }) {
   for (const v of versions) {
     await db.query("INSERT INTO bot_versions (id, project_id, version_no, label, settings, created_at) VALUES ($1, $2, $3, $4, $5, $6)", [randomUUID(), newId, v.version_no, v.label, JSON.stringify(v.settings), v.created_at]);
   }
+  const personas = await db.query("SELECT * FROM personas WHERE project_id = $1 ORDER BY created_at", [id]);
+  for (const p of personas) {
+    await db.query("INSERT INTO personas (id, project_id, data, created_at) VALUES ($1, $2, $3, $4)", [randomUUID(), newId, JSON.stringify(p.data), p.created_at]);
+  }
   return { project: projectSummary(await loadProject(db, newId)) };
 }
 
@@ -401,17 +422,31 @@ async function saveBotVersion({ db }, { id }, body) {
 function conversationOut(c) {
   return {
     id: c.id, projectId: c.project_id, botVersionId: c.bot_version_id, versionNo: c.version_no ?? null, source: c.source,
-    title: c.title, meta: c.meta, messageCount: c.message_count ?? undefined, createdAt: c.created_at, updatedAt: c.updated_at,
+    title: c.title, personaId: c.persona_id ?? null, runId: c.run_id ?? null, runLabel: c.run_label ?? null,
+    meta: c.meta, messageCount: c.message_count ?? undefined, createdAt: c.created_at, updatedAt: c.updated_at,
   };
 }
 
-async function listConversations({ db }, { id }) {
+// Optional filters: ?source=simulated&personaId=...&runId=...&versionId=...&kind=live
+async function listConversations({ db }, { id }, _body, url) {
   await loadProject(db, id);
+  const where = ["c.project_id = $1"];
+  const params = [id];
+  const q = url?.searchParams ?? new URLSearchParams();
+  const add = (sql, value) => {
+    params.push(value);
+    where.push(sql.replace("?", `$${params.length}`));
+  };
+  if (q.get("source")) add("c.source = ?", q.get("source"));
+  if (q.get("personaId")) add("c.persona_id = ?", q.get("personaId"));
+  if (q.get("runId")) add("c.run_id = ?", q.get("runId"));
+  if (q.get("versionId")) add("c.bot_version_id = ?", q.get("versionId"));
+  if (q.get("kind") === "live") where.push("c.source = 'hand-written' AND COALESCE(c.meta->>'kind', 'live') = 'live'");
   const rows = await db.query(
-    `SELECT c.*, v.version_no, (SELECT count(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count
-       FROM conversations c LEFT JOIN bot_versions v ON v.id = c.bot_version_id
-      WHERE c.project_id = $1 ORDER BY c.updated_at DESC`,
-    [id],
+    `SELECT c.*, v.version_no, r.label AS run_label, (SELECT count(*)::int FROM messages m WHERE m.conversation_id = c.id) AS message_count
+       FROM conversations c LEFT JOIN bot_versions v ON v.id = c.bot_version_id LEFT JOIN runs r ON r.id = c.run_id
+      WHERE ${where.join(" AND ")} ORDER BY c.created_at DESC`,
+    params,
   );
   return { conversations: rows.map(conversationOut) };
 }
@@ -430,14 +465,14 @@ async function createConversation({ db }, { id }, body) {
   const convId = randomUUID();
   const [{ n }] = await db.query("SELECT count(*)::int + 1 AS n FROM conversations WHERE project_id = $1", [id]);
   const title = String(body.title || `Test chat ${n}`).slice(0, 200);
-  await db.query("INSERT INTO conversations (id, project_id, bot_version_id, source, title) VALUES ($1, $2, $3, $4, $5)", [convId, id, versionId, "hand-written", title]);
+  await db.query("INSERT INTO conversations (id, project_id, bot_version_id, source, title, meta) VALUES ($1, $2, $3, $4, $5, $6)", [convId, id, versionId, "hand-written", title, JSON.stringify({ kind: "live" })]);
   await touch(db, id);
   return getConversation({ db }, { id: convId });
 }
 
 async function loadConversation(db, id) {
   const [conv] = await db.query(
-    "SELECT c.*, v.version_no, v.settings FROM conversations c LEFT JOIN bot_versions v ON v.id = c.bot_version_id WHERE c.id = $1",
+    "SELECT c.*, v.version_no, v.settings, r.label AS run_label FROM conversations c LEFT JOIN bot_versions v ON v.id = c.bot_version_id LEFT JOIN runs r ON r.id = c.run_id WHERE c.id = $1",
     [id],
   );
   if (!conv) throw new HttpError(404, "That conversation does not exist.");
@@ -473,14 +508,22 @@ async function insertMessage(db, conversationId, idx, role, text, meta) {
   return messageOut(row);
 }
 
-async function sendMessage(ctx, { id }, body) {
-  const { db, claude } = ctx;
-  const conv = await loadConversation(db, id);
-  if (!conv.settings) throw new HttpError(400, "This conversation's bot version was deleted.");
-  const userText = requireText(body.text, "Message", 8000);
-  const settings = sanitiseSettings(conv.settings);
-  const history = await db.query("SELECT role, text FROM messages WHERE conversation_id = $1 ORDER BY idx", [id]);
+async function logClaude(db, projectId, reply, kind) {
+  const cost = claudeCost(reply.model, reply.usage);
+  await logUsage(db, {
+    projectId, provider: "anthropic", model: reply.model, kind,
+    inputTokens: (reply.usage?.input_tokens ?? 0) + (reply.usage?.cache_read_input_tokens ?? 0) + (reply.usage?.cache_creation_input_tokens ?? 0),
+    outputTokens: reply.usage?.output_tokens ?? 0, costUsd: cost,
+  });
+  return cost;
+}
 
+// One user message and the bot's reply to it, saved to the conversation.
+async function exchange(ctx, conv, userText, userMeta = {}) {
+  const { db, claude } = ctx;
+  if (!conv.settings) throw new HttpError(400, "This conversation's bot version was deleted.");
+  const settings = sanitiseSettings(conv.settings);
+  const history = await db.query("SELECT role, text FROM messages WHERE conversation_id = $1 ORDER BY idx", [conv.id]);
   const retrieval = await retrieve(ctx, conv.project_id, userText, settings.topK);
   const started = Date.now();
   const reply = await claude.complete({
@@ -491,16 +534,11 @@ async function sendMessage(ctx, { id }, body) {
     messages: buildMessages(history, userText, retrieval.passages),
   });
   const latencyMs = Date.now() - started;
-  const cost = claudeCost(reply.model, reply.usage);
-  await logUsage(db, {
-    projectId: conv.project_id, provider: "anthropic", model: reply.model, kind: "chat",
-    inputTokens: (reply.usage?.input_tokens ?? 0) + (reply.usage?.cache_read_input_tokens ?? 0) + (reply.usage?.cache_creation_input_tokens ?? 0),
-    outputTokens: reply.usage?.output_tokens ?? 0, costUsd: cost,
-  });
+  const cost = await logClaude(db, conv.project_id, reply, conv.source === "hand-written" ? "chat" : "chat (generated interactions)");
 
-  const userMessage = await insertMessage(db, id, history.length, "user", userText, {});
+  const userMessage = await insertMessage(db, conv.id, history.length, "user", userText, userMeta);
   const botText = reply.refused ? "[The model declined to answer this message.]" : reply.text || "[Empty reply]";
-  const botMessage = await insertMessage(db, id, history.length + 1, "assistant", botText, {
+  const botMessage = await insertMessage(db, conv.id, history.length + 1, "assistant", botText, {
     searchMode: retrieval.mode,
     ...(retrieval.warning ? { searchWarning: retrieval.warning } : {}),
     passages: retrieval.passages.map(({ chunkId, documentId, documentTitle, idx, score, text }) => ({ chunkId, documentId, documentTitle, idx, score, text })),
@@ -513,7 +551,388 @@ async function sendMessage(ctx, { id }, body) {
     usage: reply.usage,
     costUsd: Math.round(cost * 1e6) / 1e6,
   });
-  await db.query("UPDATE conversations SET updated_at = now() WHERE id = $1", [id]);
+  await db.query("UPDATE conversations SET updated_at = now() WHERE id = $1", [conv.id]);
   await touch(db, conv.project_id);
-  return { messages: [userMessage, botMessage] };
+  return [userMessage, botMessage];
+}
+
+async function sendMessage(ctx, { id }, body) {
+  const conv = await loadConversation(ctx.db, id);
+  const userText = requireText(body.text, "Message", 8000);
+  return { messages: await exchange(ctx, conv, userText) };
+}
+
+// ---------- personas ----------
+
+function personaOut(row) {
+  return { id: row.id, projectId: row.project_id, ...row.data, conversationCount: row.conversation_count ?? 0, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+async function loadPersona(db, id) {
+  const [row] = await db.query("SELECT * FROM personas WHERE id = $1", [id]);
+  if (!row) throw new HttpError(404, "That persona does not exist.");
+  return row;
+}
+
+async function insertPersona(db, projectId, data) {
+  const persona = sanitisePersona(data);
+  if (!persona.name) throw new HttpError(400, "Give the persona a name.");
+  const id = randomUUID();
+  await db.query("INSERT INTO personas (id, project_id, data) VALUES ($1, $2, $3)", [id, projectId, JSON.stringify(persona)]);
+  return personaOut(await loadPersona(db, id));
+}
+
+async function listPersonas({ db }, { id }) {
+  await loadProject(db, id);
+  const rows = await db.query(
+    `SELECT p.*, (SELECT count(*)::int FROM conversations c WHERE c.persona_id = p.id) AS conversation_count
+       FROM personas p WHERE p.project_id = $1 ORDER BY p.created_at`,
+    [id],
+  );
+  return { personas: rows.map(personaOut) };
+}
+
+async function createPersona({ db }, { id }, body) {
+  await loadProject(db, id);
+  return { persona: await insertPersona(db, id, body.persona ?? body) };
+}
+
+async function addStarterPersonas({ db }, { id }) {
+  await loadProject(db, id);
+  const existing = new Set((await db.query("SELECT data->>'name' AS name FROM personas WHERE project_id = $1", [id])).map((r) => r.name));
+  let added = 0;
+  for (const persona of STARTER_PERSONAS) {
+    if (existing.has(persona.name)) continue;
+    await insertPersona(db, id, persona);
+    added++;
+  }
+  return { added };
+}
+
+async function samplePassages(db, projectId, n) {
+  return db.query(
+    "SELECT c.text, d.title AS \"documentTitle\" FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.project_id = $1 ORDER BY random() LIMIT $2",
+    [projectId, n],
+  );
+}
+
+async function generatePersonasRoute({ db, claude }, { id }, body) {
+  await loadProject(db, id);
+  const brief = requireText(body.brief, "Brief", 2000);
+  const count = Math.min(5, Math.max(1, Number(body.count) || 3));
+  const passages = await samplePassages(db, id, 4);
+  const result = await generatePersonas(claude, { model: body.model || undefined, brief, count, passages });
+  await logClaude(db, id, result, "generate personas");
+  const personas = [];
+  for (const p of result.personas) personas.push(await insertPersona(db, id, p));
+  return { personas };
+}
+
+async function updatePersona({ db }, { id }, body) {
+  const row = await loadPersona(db, id);
+  const persona = sanitisePersona({ ...row.data, ...(body.persona ?? body), behaviour: { ...row.data.behaviour, ...(body.persona ?? body).behaviour } });
+  if (!persona.name) throw new HttpError(400, "Give the persona a name.");
+  await db.query("UPDATE personas SET data = $2, updated_at = now() WHERE id = $1", [id, JSON.stringify(persona)]);
+  return { persona: personaOut(await loadPersona(db, id)) };
+}
+
+// Conversations keep a copy of the persona they were run with, so deleting it loses nothing.
+async function deletePersona({ db }, { id }) {
+  await loadPersona(db, id);
+  await db.query("DELETE FROM personas WHERE id = $1", [id]);
+  return { ok: true };
+}
+
+async function duplicatePersona({ db }, { id }) {
+  const row = await loadPersona(db, id);
+  return { persona: await insertPersona(db, row.project_id, { ...row.data, name: `${row.data.name} (copy)`.slice(0, 120) }) };
+}
+
+// ---------- runs: batches of generated conversations ----------
+
+async function loadVersion(db, projectId, versionId) {
+  if (versionId) {
+    const [v] = await db.query("SELECT * FROM bot_versions WHERE id = $1 AND project_id = $2", [versionId, projectId]);
+    if (!v) throw new HttpError(400, "That bot version does not belong to this project.");
+    return v;
+  }
+  const [latest] = await db.query("SELECT * FROM bot_versions WHERE project_id = $1 ORDER BY version_no DESC LIMIT 1", [projectId]);
+  if (!latest) throw new HttpError(400, "Save a bot version first.");
+  return latest;
+}
+
+function runOut(r) {
+  return {
+    id: r.id, kind: r.kind, label: r.label, settings: r.settings, createdAt: r.created_at,
+    total: r.total ?? 0, done: r.done ?? 0, failed: r.failed ?? 0,
+  };
+}
+
+async function listRuns({ db }, { id }) {
+  await loadProject(db, id);
+  const rows = await db.query(
+    `SELECT r.*,
+            (SELECT count(*)::int FROM conversations c WHERE c.run_id = r.id) AS total,
+            (SELECT count(*)::int FROM conversations c WHERE c.run_id = r.id AND c.meta->>'status' = 'done') AS done,
+            (SELECT count(*)::int FROM conversations c WHERE c.run_id = r.id AND c.meta->>'status' = 'failed') AS failed
+       FROM runs r WHERE r.project_id = $1 ORDER BY r.created_at DESC`,
+    [id],
+  );
+  const pending = await db.query(
+    `SELECT c.run_id, c.id FROM conversations c JOIN runs r ON r.id = c.run_id
+      WHERE r.project_id = $1 AND COALESCE(c.meta->>'status', 'done') NOT IN ('done', 'failed') ORDER BY c.created_at`,
+    [id],
+  );
+  return { runs: rows.map((r) => ({ ...runOut(r), pendingIds: pending.filter((p) => p.run_id === r.id).map((p) => p.id) })) };
+}
+
+const clampInt = (v, min, max, fallback) => Math.min(max, Math.max(min, Math.round(Number(v)) || fallback));
+
+async function createRun({ db }, { id }, body) {
+  await loadProject(db, id);
+  const kind = body.kind;
+  if (kind !== "simulated" && kind !== "questions") throw new HttpError(400, "Unknown kind of run.");
+  const version = await loadVersion(db, id, body.botVersionId);
+  const runId = randomUUID();
+  const [{ n }] = await db.query("SELECT count(*)::int + 1 AS n FROM runs WHERE project_id = $1", [id]);
+  const conversations = [];
+
+  if (kind === "simulated") {
+    const personaIds = Array.isArray(body.personaIds) ? body.personaIds : [];
+    if (!personaIds.length) throw new HttpError(400, "Choose at least one persona.");
+    const personas = [];
+    for (const pid of personaIds) {
+      const row = await loadPersona(db, pid);
+      if (row.project_id !== id) throw new HttpError(400, "That persona belongs to another project.");
+      personas.push(row);
+    }
+    const count = clampInt(body.count, 1, 100, personas.length);
+    const minTurns = clampInt(body.minTurns, 1, 15, 2);
+    const maxTurns = clampInt(body.maxTurns, minTurns, 15, Math.max(minTurns, 6));
+    const simulatorModel = modelInfo(body.simulatorModel) ? body.simulatorModel : DEFAULT_BOT.model;
+    const settings = { botVersionId: version.id, versionNo: version.version_no, personaIds, count, minTurns, maxTurns, simulatorModel };
+    const label = String(body.label || `Run ${n}: ${count} simulated conversation${count === 1 ? "" : "s"}, v${version.version_no}`).slice(0, 200);
+    await db.query("INSERT INTO runs (id, project_id, kind, label, settings) VALUES ($1, $2, $3, $4, $5)", [runId, id, kind, label, JSON.stringify(settings)]);
+    for (let i = 0; i < count; i++) {
+      const persona = personas[i % personas.length];
+      const meta = {
+        kind: "simulated", status: "pending", persona: persona.data, personaName: persona.data.name,
+        plan: planConversation(persona.data, { minTurns, maxTurns }), simulatorModel,
+      };
+      conversations.push({ personaId: persona.id, title: `${persona.data.name} #${Math.floor(i / personas.length) + 1}`, meta });
+    }
+  } else {
+    const questions = (Array.isArray(body.questions) ? body.questions : [])
+      .map((q) => (typeof q === "string" ? { text: q } : q))
+      .map((q) => ({ text: String(q.text ?? "").trim().slice(0, 4000), inScope: q.inScope, personaId: q.personaId || null }))
+      .filter((q) => q.text);
+    if (!questions.length) throw new HttpError(400, "Add at least one question.");
+    if (questions.length > 200) throw new HttpError(400, "Run at most 200 questions at a time.");
+    const personaNames = {};
+    for (const pid of new Set(questions.map((q) => q.personaId).filter(Boolean))) {
+      const row = await loadPersona(db, pid);
+      personaNames[pid] = row.data;
+    }
+    const settings = { botVersionId: version.id, versionNo: version.version_no, count: questions.length };
+    const label = String(body.label || `Run ${n}: ${questions.length} test question${questions.length === 1 ? "" : "s"}, v${version.version_no}`).slice(0, 200);
+    await db.query("INSERT INTO runs (id, project_id, kind, label, settings) VALUES ($1, $2, $3, $4, $5)", [runId, id, kind, label, JSON.stringify(settings)]);
+    for (const q of questions) {
+      const persona = q.personaId ? personaNames[q.personaId] : null;
+      const meta = {
+        kind: "single_question", status: "pending", question: q.text,
+        ...(typeof q.inScope === "boolean" ? { inScope: q.inScope } : {}),
+        ...(persona ? { persona, personaName: persona.name } : {}),
+      };
+      conversations.push({ personaId: q.personaId, title: q.text.slice(0, 80), meta });
+    }
+  }
+
+  const ids = [];
+  for (const c of conversations) {
+    const convId = randomUUID();
+    ids.push(convId);
+    await db.query(
+      "INSERT INTO conversations (id, project_id, bot_version_id, source, title, persona_id, run_id, meta) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [convId, id, version.id, "simulated", c.title, c.personaId, runId, JSON.stringify(c.meta)],
+    );
+  }
+  await touch(db, id);
+  const [run] = await db.query("SELECT * FROM runs WHERE id = $1", [runId]);
+  return { run: { ...runOut(run), total: ids.length }, conversationIds: ids };
+}
+
+async function deleteRun({ db }, { id }) {
+  const [run] = await db.query("SELECT * FROM runs WHERE id = $1", [id]);
+  if (!run) throw new HttpError(404, "That run does not exist.");
+  await db.query("DELETE FROM runs WHERE id = $1", [id]);
+  return { ok: true };
+}
+
+async function saveMeta(db, convId, meta) {
+  await db.query("UPDATE conversations SET meta = $2, updated_at = now() WHERE id = $1", [convId, JSON.stringify(meta)]);
+}
+
+async function finishSimulated(ctx, conv, meta, outcome) {
+  const messages = await ctx.db.query("SELECT role, text FROM messages WHERE conversation_id = $1 ORDER BY idx", [conv.id]);
+  let rating = null;
+  if (messages.length) {
+    const result = await rateConversation(ctx.claude, { model: meta.simulatorModel, persona: meta.persona, goal: meta.goal || "", messages, outcome });
+    await logClaude(ctx.db, conv.project_id, result, "simulated user");
+    rating = result.rating;
+  }
+  const done = {
+    ...meta, status: "done", outcome, rating,
+    escalated: outcome === "asked_for_human", abandoned: outcome === "gave_up",
+  };
+  delete done.finishReason;
+  await saveMeta(ctx.db, conv.id, done);
+  return done;
+}
+
+// Moves one generated conversation forward by one step: one user message and the
+// bot's reply, or the end-of-chat rating. Each step stays well within the time
+// limit; the page calls this repeatedly and shows progress.
+async function simulateStep(ctx, { id }) {
+  const { db, claude } = ctx;
+  const conv = await loadConversation(db, id);
+  const meta = { ...conv.meta };
+  if (!meta.kind || !["simulated", "single_question"].includes(meta.kind)) throw new HttpError(400, "Only generated conversations can be run.");
+  if (meta.status === "done") return { done: true, meta, messages: [] };
+  try {
+    if (meta.kind === "single_question") {
+      const added = await exchange(ctx, conv, meta.question, { generated: true });
+      const finished = { ...meta, status: "done", outcome: "answered" };
+      delete finished.error;
+      await saveMeta(db, id, finished);
+      return { done: true, meta: finished, messages: added };
+    }
+
+    if (meta.finishReason) {
+      const finished = await finishSimulated(ctx, conv, meta, meta.finishReason);
+      return { done: true, meta: finished, messages: [] };
+    }
+    const plan = meta.plan;
+    const history = await db.query("SELECT role, text FROM messages WHERE conversation_id = $1 ORDER BY idx", [id]);
+    const turnNo = history.filter((m) => m.role === "user").length + 1;
+    if (plan.giveUpAtTurn && turnNo >= plan.giveUpAtTurn) return { done: true, meta: await finishSimulated(ctx, conv, meta, "gave_up"), messages: [] };
+    if (turnNo > plan.turnLimit) return { done: true, meta: await finishSimulated(ctx, conv, meta, "max_turns"), messages: [] };
+
+    meta.status = "running";
+    const misunderstand = turnNo > 1 && Math.random() * 100 < (plan.misunderstandPct ?? 0);
+    const passages = turnNo === 1 && !meta.goal ? await samplePassages(db, conv.project_id, 4) : [];
+    const result = await personaTurn(claude, { model: meta.simulatorModel, persona: meta.persona, plan, goal: meta.goal, messages: history, turnNo, misunderstand, passages });
+    await logClaude(db, conv.project_id, result, "simulated user");
+    const turn = result.turn;
+    if (!meta.goal && turn.goal) meta.goal = String(turn.goal).slice(0, 1000);
+    const message = String(turn.message ?? "").trim().slice(0, 4000);
+    const wantsEnd = turn.action === "end" && turnNo > plan.minTurns && plan.askHumanAtTurn !== turnNo;
+
+    if (wantsEnd && !message) {
+      const outcome = turn.end_reason === "gave_up" ? "gave_up" : turn.end_reason === "goal_met" ? "goal_met" : "other";
+      return { done: true, meta: await finishSimulated(ctx, conv, meta, outcome), messages: [] };
+    }
+    if (!message) return { done: true, meta: await finishSimulated(ctx, conv, meta, "other"), messages: [] };
+
+    const askedForHuman = plan.askHumanAtTurn === turnNo;
+    const userMeta = { simulated: true, ...(misunderstand ? { misunderstanding: true } : {}), ...(askedForHuman ? { askedForHuman: true } : {}) };
+    const added = await exchange(ctx, conv, message, userMeta);
+    if (wantsEnd) meta.finishReason = turn.end_reason === "gave_up" ? "gave_up" : "goal_met";
+    else if (askedForHuman) meta.finishReason = "asked_for_human";
+    else if (turnNo >= plan.turnLimit) meta.finishReason = "max_turns";
+    delete meta.error;
+    await saveMeta(db, id, meta);
+    return { done: false, meta, messages: added };
+  } catch (err) {
+    // Keep the run going: record the problem on this conversation and let the page move on.
+    if (err.status === 429 || err.status === 503) throw err;
+    const failed = { ...meta, error: err.message, failures: (meta.failures ?? 0) + 1 };
+    if (failed.failures >= 3) failed.status = "failed";
+    await saveMeta(db, id, failed);
+    throw err;
+  }
+}
+
+async function generateQuestionsRoute({ db, claude }, { id }, body) {
+  await loadProject(db, id);
+  const count = clampInt(body.count, 1, 20, 10);
+  const outOfScopePct = clampInt(body.outOfScopePct, 0, 100, 0);
+  const passages = await samplePassages(db, id, 8);
+  if (!passages.length) throw new HttpError(400, "Add documents first, so the questions can be based on them.");
+  const persona = body.personaId ? (await loadPersona(db, body.personaId)).data : null;
+  const avoid = Array.isArray(body.avoid) ? body.avoid.map(String) : [];
+  const result = await generateQuestions(claude, { model: body.model || undefined, count, outOfScopePct, persona, passages, avoid });
+  await logClaude(db, id, result, "generate questions");
+  return { questions: result.questions };
+}
+
+// ---------- hand-written and imported conversations ----------
+
+function cleanMessages(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((m) => ({ role: m.role === "assistant" || m.role === "bot" ? "assistant" : m.role === "user" ? "user" : null, text: String(m.text ?? "").trim().slice(0, 8000) }))
+    .filter((m) => m.role && m.text);
+}
+
+async function insertMessages(db, convId, messages, metaFor = () => ({})) {
+  for (let start = 0; start < messages.length; start += 100) {
+    const slice = messages.slice(start, start + 100);
+    const params = [];
+    const rows = slice.map((m, j) => {
+      const base = params.length;
+      params.push(randomUUID(), convId, start + j, m.role, m.text, JSON.stringify(metaFor(m)));
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+    });
+    await db.query(`INSERT INTO messages (id, conversation_id, idx, role, text, meta) VALUES ${rows.join(", ")}`, params);
+  }
+}
+
+async function createWrittenConversation({ db }, { id }, body) {
+  await loadProject(db, id);
+  const messages = cleanMessages(body.messages);
+  if (!messages.length) throw new HttpError(400, "Write at least one message.");
+  let versionId = null;
+  if (body.botVersionId) versionId = (await loadVersion(db, id, body.botVersionId)).id;
+  let persona = null;
+  if (body.personaId) persona = await loadPersona(db, body.personaId);
+  const convId = randomUUID();
+  const [{ n }] = await db.query("SELECT count(*)::int + 1 AS n FROM conversations WHERE project_id = $1", [id]);
+  const title = String(body.title || `Written conversation ${n}`).slice(0, 200);
+  const meta = { kind: "written", ...(persona ? { persona: persona.data, personaName: persona.data.name } : {}), ...(body.note ? { note: String(body.note).slice(0, 2000) } : {}) };
+  await db.query(
+    "INSERT INTO conversations (id, project_id, bot_version_id, source, title, persona_id, meta) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    [convId, id, versionId, "hand-written", title, persona?.id ?? null, JSON.stringify(meta)],
+  );
+  await insertMessages(db, convId, messages, () => ({ written: true }));
+  await touch(db, id);
+  return getConversation({ db }, { id: convId });
+}
+
+async function importConversations({ db }, { id }, body) {
+  await loadProject(db, id);
+  const parsed = await parseImport({ filename: body.filename, contentBase64: body.contentBase64, text: body.text });
+  const messageCount = parsed.reduce((n, c) => n + c.messages.length, 0);
+  if (parsed.length > 2000 || messageCount > 20000) throw new HttpError(400, "That is more than 2,000 conversations or 20,000 messages. Split it into smaller files.");
+  const summary = {
+    conversations: parsed.length,
+    messages: messageCount,
+    preview: parsed.slice(0, 3).map((c) => ({ key: c.key, title: c.title, persona: c.persona, messages: c.messages.slice(0, 6), more: Math.max(0, c.messages.length - 6) })),
+  };
+  if (body.dryRun) return summary;
+
+  const runId = randomUUID();
+  const source = body.filename ? String(body.filename).slice(0, 200) : "pasted text";
+  const label = String(body.label || `Import: ${source}`).slice(0, 200);
+  await db.query("INSERT INTO runs (id, project_id, kind, label, settings) VALUES ($1, $2, $3, $4, $5)", [runId, id, "import", label, JSON.stringify({ source, ...summary, preview: undefined })]);
+  for (const [i, c] of parsed.entries()) {
+    const convId = randomUUID();
+    const meta = { kind: "imported", status: "done", sourceKey: c.key, ...(c.persona ? { personaName: c.persona } : {}) };
+    const title = (c.title || (parsed.length > 1 || c.key !== "1" ? `Imported ${c.key}` : `Imported conversation ${i + 1}`)).slice(0, 200);
+    await db.query(
+      "INSERT INTO conversations (id, project_id, bot_version_id, source, title, run_id, meta) VALUES ($1, $2, NULL, $3, $4, $5, $6)",
+      [convId, id, "imported", title, runId, JSON.stringify(meta)],
+    );
+    await insertMessages(db, convId, c.messages, (m) => (m.sourceRow ? { sourceRow: m.sourceRow } : {}));
+  }
+  await touch(db, id);
+  return { ...summary, runId, preview: undefined };
 }

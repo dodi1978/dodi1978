@@ -117,6 +117,25 @@ const SCHEMA = [
      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
    )`,
   `CREATE INDEX IF NOT EXISTS usage_project_idx ON usage_log(project_id)`,
+  // Stage 2: personas, and runs that group generated conversations.
+  `CREATE TABLE IF NOT EXISTS personas (
+     id TEXT PRIMARY KEY,
+     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+     data JSONB NOT NULL,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS personas_project_idx ON personas(project_id)`,
+  `CREATE TABLE IF NOT EXISTS runs (
+     id TEXT PRIMARY KEY,
+     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+     kind TEXT NOT NULL,
+     label TEXT NOT NULL DEFAULT '',
+     settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS run_id TEXT REFERENCES runs(id) ON DELETE CASCADE`,
+  `CREATE INDEX IF NOT EXISTS conversations_run_idx ON conversations(run_id)`,
 ];
 
 // Creates the tables if they are missing. Safe to run on every cold start.

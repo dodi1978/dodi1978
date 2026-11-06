@@ -29,14 +29,40 @@ export function fakeEmbedder({ available = true, fail = false } = {}) {
   };
 }
 
-export function fakeClaude(reply = (req) => `You asked: ${req.messages.at(-1).content.split("\n\n").at(-1)}`) {
+// A stand-in for the simulated user and generators: answers structured-output requests.
+export function defaultJson(req) {
+  const props = req.schema.properties;
+  const prompt = req.messages.at(-1).content;
+  if (props.action) {
+    const turn = Number(/message number (\d+)/.exec(prompt)?.[1] ?? 1);
+    const mayEnd = /you may end/.test(prompt);
+    return { goal: "Find out about late fees", action: mayEnd ? "end" : "send", message: mayEnd ? "Thanks, that helps." : `Question ${turn} about late fees?`, end_reason: mayEnd ? "goal_met" : "none" };
+  }
+  if (props.score) return { score: 4, comment: "Quick and clear." };
+  if (props.questions) {
+    const count = Number(/Write (\d+) different/.exec(prompt)?.[1] ?? 3);
+    return { questions: Array.from({ length: count }, (_, i) => ({ text: `How much are late fees, version ${i + 1}?`, in_scope: i % 2 === 0 })) };
+  }
+  if (props.personas) {
+    const count = Number(/Create (\d+) distinct/.exec(prompt)?.[1] ?? 2);
+    return { personas: Array.from({ length: count }, (_, i) => ({ name: `Generated ${i + 1}`, description: "A student.", goal: "", communication_style: "Casual.", language_background: "English.", give_up_pct: 10, ask_human_pct: 5, misunderstand_pct: 0, adversarial: false })) };
+  }
+  throw new Error("Unexpected schema");
+}
+
+export function fakeClaude(reply = (req) => `You asked: ${req.messages.at(-1).content.split("\n\n").at(-1)}`, json = defaultJson) {
   const calls = [];
   return {
     available: true,
     calls,
     async complete(req) {
       calls.push(req);
-      return { text: reply(req), model: req.model, usage: { input_tokens: 100, output_tokens: 20 }, stopReason: "end_turn", refused: false };
+      const usage = { input_tokens: 100, output_tokens: 20 };
+      if (req.schema) {
+        const data = json(req);
+        return { json: data, text: JSON.stringify(data), model: req.model ?? "claude-opus-5-5", usage, stopReason: "end_turn", refused: false };
+      }
+      return { text: reply(req), model: req.model, usage, stopReason: "end_turn", refused: false };
     },
   };
 }

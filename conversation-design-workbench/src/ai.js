@@ -21,13 +21,14 @@ function explain(err) {
   return err;
 }
 
-// Returns { text, model, usage, stopReason, refused }.
+// Returns { text, model, usage, stopReason, refused } and, when a JSON schema is
+// given, `json`: the reply parsed against that schema (structured output).
 export function createClaude({ apiKey, timeoutMs = 25_000 } = {}) {
   let client;
   const getClient = () => (client ??= new Anthropic({ apiKey, timeout: timeoutMs, maxRetries: 1 }));
   return {
     available: Boolean(apiKey),
-    async complete({ model = DEFAULT_MODEL, system, messages, maxTokens = 1024, effort = "low" }) {
+    async complete({ model = DEFAULT_MODEL, system, messages, maxTokens = 1024, effort = "low", schema }) {
       if (!apiKey) throw new AIError("Claude is not set up (ANTHROPIC_API_KEY is missing).", 503);
       const info = modelInfo(model);
       const params = {
@@ -35,7 +36,7 @@ export function createClaude({ apiKey, timeoutMs = 25_000 } = {}) {
         max_tokens: maxTokens,
         system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
         messages,
-        output_config: { effort },
+        output_config: schema ? { effort, format: { type: "json_schema", schema } } : { effort },
       };
       // If a safety classifier declines, the API re-runs the request on a
       // recommended fallback model instead of returning a refusal.
@@ -50,7 +51,16 @@ export function createClaude({ apiKey, timeoutMs = 25_000 } = {}) {
         throw explain(err);
       }
       const text = response.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+      let json;
+      if (schema && response.stop_reason !== "refusal") {
+        try {
+          json = JSON.parse(text);
+        } catch {
+          throw new AIError(response.stop_reason === "max_tokens" ? "Claude's answer was cut off. Try a smaller batch." : "Claude's answer could not be read. Try again.", 502);
+        }
+      }
       return {
+        json,
         text,
         model: response.model,
         usage: response.usage,
