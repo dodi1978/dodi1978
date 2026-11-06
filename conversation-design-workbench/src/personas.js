@@ -1,3 +1,5 @@
+import { sanitiseRapport, rapportNeedsText } from "./framework.js";
+
 // Personas: who the simulated users are. They are descriptive, as in conversation
 // design practice; what a test run should cover is set per run (see simulate.js).
 
@@ -70,7 +72,8 @@ export const STARTER_PERSONAS = [
 
 const text = (v, max) => String(v ?? "").trim().slice(0, max);
 
-export function sanitisePersona(input = {}) {
+// framework: the project's rapport framework; rapport entries for unknown dimensions are dropped.
+export function sanitisePersona(input = {}, framework) {
   return {
     name: text(input.name, 120),
     description: text(input.description, 3000),
@@ -78,15 +81,18 @@ export function sanitisePersona(input = {}) {
     communicationStyle: text(input.communicationStyle, 2000),
     languageBackground: text(input.languageBackground, 1000),
     adversarial: Boolean(input.adversarial),
+    rapport: sanitiseRapport(input.rapport, framework),
+    ...(input.source ? { source: text(input.source, 300) } : {}),
   };
 }
 
-export function personaProfile(p) {
+export function personaProfile(p, framework) {
   return [
     `Name: ${p.name}`,
     p.description && `Who they are: ${p.description}`,
     p.communicationStyle && `How they write: ${p.communicationStyle}`,
     p.languageBackground && `Language background: ${p.languageBackground}`,
     p.adversarial && "This is an adversarial test persona: stay in that role.",
+    rapportNeedsText(p.rapport, framework),
   ].filter(Boolean).join("\n");
 }

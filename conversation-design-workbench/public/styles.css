@@ -234,3 +234,33 @@ tr.clickable:hover td { background: var(--surface-2); }
 .mix-normal { font-size: 1.3rem; padding: 0.3rem 0; }
 .danger-text { color: var(--danger); }
 .filters { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+
+/* Rapport framework and persona rapport needs */
+dialog.wide { width: min(900px, calc(100vw - 32px)); }
+.rapport-grid { display: flex; flex-direction: column; gap: 0.6rem; }
+.rapport-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) 130px 2fr; gap: 0.6rem; align-items: start; padding-bottom: 0.6rem; border-bottom: 1px solid var(--border); }
+.rapport-row:last-child { border-bottom: none; padding-bottom: 0; }
+.rapport-row .hint { margin-top: 0.1rem; }
+.evidence { font-size: 0.8rem; margin-top: 0.3rem; }
+.evidence ul, .quotes { margin: 0.3rem 0 0; padding-left: 1.1rem; color: var(--muted); font-style: italic; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.3rem 0 0.4rem; }
+.chip { font-size: 0.75rem; padding: 0.12rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); }
+.chip.imp-high { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 600; }
+.chip.imp-medium { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.chip.imp-low, .chip.imp-none { color: var(--muted); }
+.rapport-detail { margin: 0.4rem 0 0; }
+.rapport-detail dt { font-weight: 600; margin-top: 0.4rem; }
+.rapport-detail dd { margin: 0.1rem 0 0; }
+.framework-card > summary { cursor: pointer; }
+.fw-list { display: flex; flex-direction: column; gap: 0.8rem; }
+.fw-dim { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.type-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.check.type { align-items: flex-start; }
+.persona-card.compact { margin-bottom: 0.6rem; }
+.perception { margin: 0.4rem 0 0.8rem; }
+.score { display: inline-block; min-width: 1.8rem; text-align: center; border-radius: 6px; padding: 0.05rem 0.4rem; font-weight: 600; background: var(--surface-2); }
+.score.s1, .score.s2 { background: var(--danger-soft); color: var(--danger); }
+.score.s4, .score.s5 { background: var(--ok-soft); color: var(--ok); }
+@media (max-width: 800px) {
+  .rapport-row { grid-template-columns: 1fr; }
+}

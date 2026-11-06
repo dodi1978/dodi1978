@@ -38,7 +38,15 @@ export function defaultJson(req) {
     const mayEnd = /you may end/.test(prompt);
     return { goal: "Find out about late fees", action: mayEnd ? "end" : "send", message: mayEnd ? "Thanks, that helps." : `Question ${turn} about late fees?`, end_reason: mayEnd ? "goal_met" : "none" };
   }
-  if (props.score) return { score: 4, comment: "Quick and clear." };
+  if (props.score) {
+    const rapport = props.rapport ? Object.fromEntries(Object.keys(props.rapport.properties).map((k, i) => [k, { score: (i % 5) + 1, comment: `Felt ${k}.` }])) : undefined;
+    return { score: 4, comment: "Quick and clear.", ...(rapport ? { rapport } : {}) };
+  }
+  if (props.types) return { types: [{ name: "Anxious carers", summary: "Carers who worry about getting it wrong." }, { name: "Confident regulars", summary: "Frequent users who want speed." }] };
+  if (props.communication_style && !props.personas) {
+    const rapport = props.rapport ? Object.fromEntries(Object.keys(props.rapport.properties).map((k) => [k, { importance: k === "autonomy" ? "high" : "unclear", note: `Needs on ${k}.`, evidence: k === "autonomy" ? ["I like to decide for myself", "a quote that is not in the text"] : [] }])) : undefined;
+    return { name: "Anxious carer", description: "Looks after a parent.", goal: "", communication_style: "Polite.", language_background: "English.", adversarial: false, ...(rapport ? { rapport } : {}) };
+  }
   if (props.questions) {
     const count = Number(/Write (\d+) different/.exec(prompt)?.[1] ?? 3);
     return { questions: Array.from({ length: count }, (_, i) => ({ text: `How much are late fees, version ${i + 1}?`, in_scope: i % 2 === 0 })) };

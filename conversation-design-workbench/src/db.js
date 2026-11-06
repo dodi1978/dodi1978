@@ -136,6 +136,8 @@ const SCHEMA = [
    )`,
   `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS run_id TEXT REFERENCES runs(id) ON DELETE CASCADE`,
   `CREATE INDEX IF NOT EXISTS conversations_run_idx ON conversations(run_id)`,
+  // Rapport framework per project (NULL means the default GAAFFE taxonomy).
+  `ALTER TABLE projects ADD COLUMN IF NOT EXISTS framework JSONB`,
 ];
 
 // Creates the tables if they are missing. Safe to run on every cold start.
