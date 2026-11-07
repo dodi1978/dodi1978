@@ -783,35 +783,37 @@ function importPanel(ctx) {
 // ---------- interactions page ----------
 
 // The "Simulated interactions" tab: the four ways of creating interactions, and their runs.
-export async function createTab(body, projectId) {
-  const [{ runs }, { personas }, { versions }] = await Promise.all([
+// The four ways of creating interactions, as sub-tabs (each with its own address), and
+// which runs belong under each.
+const MAKERS = [
+  ["simulate", "Simulate conversations", simulatePanel, "simulated"],
+  ["questions", "Test questions", questionsPanel, "questions"],
+  ["write", "Write a conversation", writePanel, null],
+  ["import", "Import transcripts", importPanel, "import"],
+];
+
+export async function createTab(body, projectId, _overview, extra = []) {
+  const maker = MAKERS.find(([k]) => k === extra[0]);
+  if (!maker) {
+    location.replace(`#/p/${projectId}/create/simulate`);
+    return;
+  }
+  const [key, name, panel, runKind] = maker;
+  const [{ runs: allRuns }, { personas }, { versions }] = await Promise.all([
     api("GET", `/api/projects/${projectId}/runs`),
     api("GET", `/api/projects/${projectId}/personas`),
     api("GET", `/api/projects/${projectId}/bot`),
   ]);
-  const refresh = () => createTab(body, projectId).catch(fail);
+  const refresh = () => createTab(body, projectId, _overview, extra).catch(fail);
   const area = h("div");
   const ctx = { projectId, versions, personas, refresh, area };
+  const subtabs = h("nav", { class: "subtabs", "aria-label": "Ways to create interactions" },
+    MAKERS.map(([k, label]) => h("a", { href: `#/p/${projectId}/create/${k}`, class: k === key ? "active" : "", "aria-current": k === key ? "page" : null }, label)));
+  const createCard = h("div", { class: "card" }, h("h2", {}, name), panel(ctx));
 
-  // Create interactions
-  const makers = { simulate: ["Simulate conversations", simulatePanel], questions: ["Test questions", questionsPanel], write: ["Write a conversation", writePanel], import: ["Import transcripts", importPanel] };
-  let current = sessionStorageGet("cdw-maker") || "simulate";
-  if (!makers[current]) current = "simulate";
-  const panelHolder = h("div");
-  const showMaker = (key) => {
-    current = key;
-    sessionStorageSet("cdw-maker", key);
-    makerButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === key)));
-    fill(panelHolder, makers[key][1](ctx));
-  };
-  const makerButtons = Object.entries(makers).map(([key, [name]]) => h("button", { type: "button", "data-key": key, onclick: () => showMaker(key) }, name));
-  const createCard = h("div", { class: "card" },
-    h("p", { class: "muted", style: "margin-top:0" }, "Choose how to create interactions. Everything created here is collected under Interactions, together with test chats and conversations with real users."),
-    h("div", { class: "segmented wrap", role: "group", "aria-label": "How to create" }, makerButtons), panelHolder);
-  showMaker(current);
-
-  // Runs
-  const runRows = runs.filter((r) => r.kind !== "import" || r.total).map((r) => h("tr", {},
+  // Runs of this kind (simulations, test questions or imports).
+  const runs = runKind ? allRuns.filter((r) => r.kind === runKind && (r.kind !== "import" || r.total)) : [];
+  const runRows = runs.map((r) => h("tr", {},
     h("td", {}, h("a", { href: `#/p/${projectId}/interactions?runId=${r.id}` }, r.label)),
     h("td", { class: "small" }, { simulated: "simulation", questions: "test questions", import: "import" }[r.kind] ?? r.kind),
     h("td", { class: "small" }, `${r.done} of ${r.total} finished${r.failed ? `, ${r.failed} failed` : ""}`),
@@ -827,13 +829,14 @@ export async function createTab(body, projectId) {
           fail(err);
         }
       } }, "Delete")))));
-  const runsCard = runs.length ? h("div", { class: "card" }, h("h2", {}, "Runs and imports"),
-    h("p", { class: "small muted" }, "Click a run to see its conversations under Interactions."),
+  const runsTitle = { simulated: "Simulation runs", questions: "Test question runs", import: "Imports" }[runKind];
+  const runsCard = runs.length ? h("div", { class: "card" }, h("h2", {}, runsTitle),
+    h("p", { class: "small muted" }, "Click one to see its conversations under Interactions. Everything you create is collected there."),
     h("div", { class: "table-wrap" }, h("table", {},
       h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Kind"), h("th", {}, "Progress"), h("th", {}, "Started"), h("th", {}, ""))),
       h("tbody", {}, runRows)))) : null;
 
-  fill(body, createCard, area, runsCard);
+  fill(body, subtabs, createCard, area, runsCard);
 }
 
 // The "Interactions" tab: everything collected, from every source, with filters.
