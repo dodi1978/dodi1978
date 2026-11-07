@@ -295,3 +295,13 @@ dialog.wide { width: min(900px, calc(100vw - 32px)); }
 .type-chip .count { font-weight: 700; }
 .type-chip.active { outline: 2px solid currentColor; outline-offset: 1px; }
 @media (max-width: 800px) { .type-group.created { border-left: none; padding-left: 0; } }
+
+/* Real user chat: the link to share */
+.link-card.live { border-color: var(--ok); }
+.link-card.off { border-color: var(--warn); }
+.share-link.big { margin: 0.4rem 0 0; }
+.share-link.big input { font-size: 1rem; padding: 0.65rem 0.8rem; }
+
+.section-title { margin: 1.4rem 0 0.8rem; }
+
+.persona-card.is-added { opacity: 0.7; }

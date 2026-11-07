@@ -117,7 +117,7 @@ async function projectsPage() {
 const TABS = [
   ["overview", "Overview"],
   ["design", "Chatbot design"],
-  ["chat", "Test chat"],
+  ["chat", "Chat"],
   ["personas", "Personas"],
   ["create", "Create interactions"],
   ["interactions", "Interactions"],
@@ -490,7 +490,7 @@ async function botTab(body, projectId) {
             toast(`Loaded version ${v.versionNo} into the editor.`);
             form.scrollIntoView({ behavior: "smooth" });
           } }, "Load"),
-          h("a", { class: "link-button", href: `#/p/${projectId}/chat/new/${v.id}` }, "Chat")))))))),
+          h("a", { class: "link-button", href: `#/p/${projectId}/chat/test/new/${v.id}` }, "Test chat")))))))),
   );
 
   fill(body, ...setupNotices(), form, versionList);
@@ -498,7 +498,27 @@ async function botTab(body, projectId) {
 
 // ---------- test chat ----------
 
-async function chatTab(body, projectId, _overview, extra = []) {
+// "Chat": two sub-tabs, chatting with real users through a link, and testing the bot yourself.
+const CHAT_PARTS = [["real", "Real user chat"], ["test", "Test chat"]];
+
+async function chatTab(body, projectId, overview, extra = []) {
+  const [part, ...rest] = extra;
+  if (part && !CHAT_PARTS.some(([k]) => k === part)) {
+    // Addresses from before the sub-tabs (…/chat/<conversation>) open in Test chat.
+    location.replace(`#/p/${projectId}/chat/test/${extra.join("/")}`);
+    return;
+  }
+  const current = part || "real";
+  const inner = h("div");
+  fill(body,
+    h("nav", { class: "subtabs", "aria-label": "Chat sections" },
+      CHAT_PARTS.map(([key, label]) => h("a", { href: `#/p/${projectId}/chat/${key}`, class: key === current ? "active" : "", "aria-current": key === current ? "page" : null }, label))),
+    inner);
+  if (current === "test") await testChatTab(inner, projectId, rest);
+  else await realChatTab(inner, projectId);
+}
+
+async function testChatTab(body, projectId, extra = []) {
   const [convParam, versionParam] = extra;
   const [{ conversations }, { versions }] = await Promise.all([
     api("GET", `/api/projects/${projectId}/conversations?kind=live`),
@@ -507,7 +527,7 @@ async function chatTab(body, projectId, _overview, extra = []) {
 
   if (convParam === "new") {
     const { conversation } = await api("POST", `/api/projects/${projectId}/conversations`, { botVersionId: versionParam || versions[0]?.id });
-    location.replace(`#/p/${projectId}/chat/${conversation.id}`);
+    location.replace(`#/p/${projectId}/chat/test/${conversation.id}`);
     return;
   }
 
@@ -516,19 +536,17 @@ async function chatTab(body, projectId, _overview, extra = []) {
   const list = h("div", { class: "card conv-list" },
     h("label", { for: "chat-version", class: "small" }, "New chat with"),
     versionSelect,
-    h("button", { class: "primary new", style: "margin-top:0.5rem", onclick: () => (location.hash = `#/p/${projectId}/chat/new/${versionSelect.value}`) }, "Start new chat"),
+    h("button", { class: "primary new", style: "margin-top:0.5rem", onclick: () => (location.hash = `#/p/${projectId}/chat/test/new/${versionSelect.value}`) }, "Start new chat"),
     h("hr", { style: "border:none;border-top:1px solid var(--border)" }),
     conversations.length
-      ? conversations.map((c) => h("a", { class: `conv-item ${c.id === convParam ? "active" : ""}`, href: `#/p/${projectId}/chat/${c.id}` },
+      ? conversations.map((c) => h("a", { class: `conv-item ${c.id === convParam ? "active" : ""}`, href: `#/p/${projectId}/chat/test/${c.id}` },
           h("div", {}, c.title),
           h("div", { class: "meta" }, `v${c.versionNo ?? "?"} · ${plural(c.messageCount, "message")} · ${when(c.updatedAt)}`)))
       : h("p", { class: "muted small" }, "No conversations yet."),
   );
 
   const pane = h("div", { class: "card chat-pane" });
-  const shareHolder = h("div");
-  fill(body, ...setupNotices(), shareHolder, h("div", { class: "chat-layout" }, list, pane));
-  shareCard(shareHolder, projectId, versions).catch(fail);
+  fill(body, ...setupNotices(), h("div", { class: "chat-layout" }, list, pane));
 
   const selected = convParam || conversations[0]?.id;
   if (!selected) {
@@ -536,7 +554,7 @@ async function chatTab(body, projectId, _overview, extra = []) {
     return;
   }
   if (!convParam) {
-    location.replace(`#/p/${projectId}/chat/${selected}`);
+    location.replace(`#/p/${projectId}/chat/test/${selected}`);
     return;
   }
   await conversationPane(pane, projectId, selected);
@@ -602,7 +620,7 @@ async function conversationPane(pane, projectId, conversationId) {
         if (!(await confirmDialog("Delete this conversation?"))) return;
         try {
           await api("DELETE", `/api/conversations/${conversationId}`);
-          location.hash = `#/p/${projectId}/chat`;
+          location.hash = `#/p/${projectId}/chat/test`;
         } catch (err) {
           fail(err);
         }
@@ -648,10 +666,73 @@ route();
 
 // ---------- sharing the chat with real users ----------
 
-async function shareCard(holder, projectId, versions) {
-  const { share, defaults, conversationsLast24h } = await api("GET", `/api/projects/${projectId}/share`);
-  const s = share ?? { ...defaults, token: null };
-  const link = s.token ? `${location.origin}/c/${s.token}` : "";
+async function realChatTab(body, projectId) {
+  const [{ share, conversationsLast24h }, { versions }, { conversations }] = await Promise.all([
+    api("GET", `/api/projects/${projectId}/share`),
+    api("GET", `/api/projects/${projectId}/bot`),
+    api("GET", `/api/projects/${projectId}/conversations?kind=real`),
+  ]);
+  const reload = () => realChatTab(body, projectId).catch(fail);
+  const s = share;
+  const link = `${location.origin}/c/${s.token}`;
+  const version = versions.find((v) => v.id === s.botVersionId) ?? versions[0];
+
+  // The link, ready to share.
+  const linkInput = h("input", { id: "sh-link", value: link, readonly: true, "aria-label": "Link for participants", onclick: (e) => e.target.select() });
+  const linkCard = h("div", { class: `card link-card ${s.enabled ? "live" : "off"}` },
+    h("div", { class: "row" }, h("h2", { style: "margin:0" }, "Link for participants"), h("span", { class: "spacer" }),
+      s.enabled ? h("span", { class: "badge ok" }, "switched on") : h("span", { class: "badge warn" }, "switched off")),
+    h("p", { class: "muted" }, s.enabled
+      ? "Send this link to participants, for example by email or in a survey. They do not need the passphrase and only see the chat."
+      : "This is your link, but it is switched off: participants who open it see “not available”. Switch it on under Settings below when you are ready."),
+    h("div", { class: "share-link big" },
+      linkInput,
+      h("button", { type: "button", class: "primary", onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(link);
+          toast("Link copied.");
+        } catch {
+          linkInput.select();
+          toast("Select the link and copy it.");
+        }
+      } }, "Copy link"),
+      h("a", { class: "button", href: link, target: "_blank", rel: "noopener" }, "Open as a participant")),
+    h("p", { class: "small muted", style: "margin:0.6rem 0 0" },
+      `Participants talk to ${s.botVersionId && version ? `bot version v${version.versionNo}${version.label ? ` (${version.label})` : ""}` : `the newest bot version${version ? ` (now v${version.versionNo})` : ""}`}. `,
+      h("button", { type: "button", class: "link-button small", onclick: async () => {
+        if (!(await confirmDialog("Make a new link? The current link stops working straight away, so anyone you sent it to can no longer use it.", "New link"))) return;
+        try {
+          await api("POST", `/api/projects/${projectId}/share/new-link`);
+          toast("New link made.");
+          reload();
+        } catch (err) {
+          fail(err);
+        }
+      } }, "Make a new link")));
+
+  // Recent chats with real users.
+  const recent = h("div", { class: "card" },
+    h("div", { class: "row" }, h("h2", { style: "margin:0" }, "Chats with real users"), h("span", { class: "spacer" }),
+      h("a", { href: `#/p/${projectId}/interactions?kind=real` }, "See all under Interactions")),
+    h("p", { class: "muted" }, `${plural(conversations.length, "chat")} so far, ${conversationsLast24h} in the last 24 hours (limit ${s.dailyLimit}).`),
+    conversations.length
+      ? h("div", { class: "table-wrap" }, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", {}, "Participant"), h("th", {}, "Bot"), h("th", {}, "Messages"), h("th", {}, "Ended"), h("th", {}, "Rating"), h("th", {}, "Started"))),
+          h("tbody", {}, conversations.slice(0, 8).map((c) => h("tr", { class: "clickable", onclick: () => (location.hash = `#/p/${projectId}/interactions/${c.id}`) },
+            h("td", {}, h("a", { href: `#/p/${projectId}/interactions/${c.id}`, onclick: (e) => e.stopPropagation() }, c.title)),
+            h("td", { class: "small" }, c.versionNo ? `v${c.versionNo}` : ""),
+            h("td", { class: "small" }, c.messageCount),
+            h("td", { class: "small" }, c.meta?.endedAt ? (c.meta.outcome === "asked_for_human" ? "asked for a person" : "ended by participant") : "not ended"),
+            h("td", { class: "small" }, c.meta?.rating ? `${c.meta.rating.score}/5` : ""),
+            h("td", { class: "small" }, when(c.createdAt)))))))
+      : h("p", { class: "small muted" }, "No chats yet. They appear here as soon as participants use the link."));
+
+  const settings = h("div");
+  fill(body, ...setupNotices(), linkCard, settings, recent);
+  shareSettings(settings, projectId, versions, s, reload);
+}
+
+function shareSettings(holder, projectId, versions, s, reload) {
   const f = {
     enabled: h("input", { type: "checkbox", id: "sh-enabled", checked: s.enabled, style: "width:auto" }),
     version: h("select", { id: "sh-version" }, h("option", { value: "" }, "Always the newest version"), versions.map((v) => h("option", { value: v.id, selected: v.id === s.botVersionId }, `v${v.versionNo}${v.label ? ` – ${v.label}` : ""}`))),
@@ -665,37 +746,10 @@ async function shareCard(holder, projectId, versions) {
     dailyLimit: h("input", { id: "sh-daily", type: "number", min: 1, max: 1000, value: s.dailyLimit }),
     maxMessages: h("input", { id: "sh-max", type: "number", min: 1, max: 100, value: s.maxMessages }),
   };
-  const save = h("button", { class: "primary", type: "submit" }, "Save");
-  const reload = () => shareCard(holder, projectId, versions).catch(fail);
-  const status = s.enabled && s.token
-    ? h("span", { class: "badge ok" }, "link is live")
-    : h("span", { class: "badge" }, "off");
-  const linkRow = link ? h("div", { class: "share-link" },
-    h("input", { id: "sh-link", value: link, readonly: true, "aria-label": "Chat link", onclick: (e) => e.target.select() }),
-    h("button", { type: "button", onclick: async () => {
-      try {
-        await navigator.clipboard.writeText(link);
-        toast("Link copied.");
-      } catch {
-        document.getElementById("sh-link").select();
-        toast("Select the link and copy it.");
-      }
-    } }, "Copy"),
-    s.enabled ? h("a", { class: "button", href: link, target: "_blank", rel: "noopener" }, "Open") : null,
-    h("button", { type: "button", class: "link-button", onclick: async () => {
-      if (!(await confirmDialog("Make a new link? The current link stops working straight away.", "New link"))) return;
-      try {
-        await api("POST", `/api/projects/${projectId}/share/new-link`);
-        toast("New link made.");
-        reload();
-      } catch (err) {
-        fail(err);
-      }
-    } }, "Make a new link")) : null;
+  const save = h("button", { class: "primary", type: "submit" }, "Save settings");
   const check = (input, label, hint) => h("div", { class: "field" }, h("label", { class: "check", for: input.id }, input, ` ${label}`), hint ? h("div", { class: "hint" }, hint) : null);
-  fill(holder, h("details", { class: "card share-card", open: !share || undefined },
-    h("summary", {}, h("strong", {}, "Share with real users"), " ", status,
-      h("span", { class: "small muted" }, ` · ${plural(conversationsLast24h, "real-user chat")} in the last 24 hours`)),
+  fill(holder, h("div", { class: "card share-card" },
+    h("h2", {}, "Settings"),
     h("form", { onsubmit: async (e) => {
       e.preventDefault();
       const done = busy(save, "Saving…");
@@ -713,8 +767,7 @@ async function shareCard(holder, projectId, versions) {
         done();
       }
     } },
-      h("p", { class: "muted", style: "margin-top:0.8rem" }, "Give participants a link to chat with your bot. They do not need the passphrase and only see the chat. Their conversations are saved under Interactions as “real user”, with the bot version, their consent, how the chat ended and their satisfaction rating. No names or contact details are asked for."),
-      linkRow,
+      h("p", { class: "muted" }, "What participants see and can do. Their conversations are saved under Interactions as “real user”, with the bot version, their consent, how the chat ended and their satisfaction rating. No names or contact details are asked for."),
       check(f.enabled, "Link is switched on", "Switch it off at any time; the link then shows “not available”."),
       h("div", { class: "grid-2" },
         h("div", { class: "field" }, h("label", { for: "sh-version" }, "Bot version participants talk to"), f.version),

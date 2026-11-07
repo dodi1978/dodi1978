@@ -152,7 +152,7 @@ async function runWithProgress(container, ids, after) {
 
 const IMPORTANCE_LABELS = { "": "Not stated", low: "Low", medium: "Medium", high: "High" };
 
-function rapportFields(framework, rapport = {}) {
+function rapportFields(framework, rapport = {}, extra = null) {
   const rows = framework.dimensions.map((d) => {
     const current = rapport[d.key] ?? {};
     const importance = h("select", { id: `pr-${d.key}-imp`, "aria-label": `${d.name}: importance` },
@@ -167,14 +167,16 @@ function rapportFields(framework, rapport = {}) {
   });
   return {
     el: h("fieldset", { class: "field plain" },
-      h("legend", {}, `Rapport needs (${framework.name})`),
+      h("legend", {}, `Rapport needs (${framework.name}) `, extra),
       h("p", { class: "hint", style: "margin-top:0" }, "How much each dimension matters to this user, and what they need. Simulated users react to the bot in line with these, and rate each dimension at the end."),
       h("div", { class: "rapport-grid" }, rows.map((r) => r.el))),
     value: () => Object.fromEntries(rows.map((r) => [r.key, { importance: r.importance.value, note: r.note.value, ...(r.evidence ? { evidence: r.evidence } : {}) }])),
   };
 }
 
-function personaForm(persona = {}, framework, onSave) {
+// Builds the persona form. onSave gets the persona's fields; onCancel is optional.
+// rapportExtra: something to show in the Rapport needs heading (the "Edit framework" link).
+function personaFormElement(persona, framework, { onSave, onCancel, rapportExtra, title }) {
   const f = {
     name: h("input", { id: "pf-name", value: persona.name ?? "", maxlength: 120, required: true }),
     description: h("textarea", { id: "pf-desc", rows: 3 }, persona.description ?? ""),
@@ -183,9 +185,8 @@ function personaForm(persona = {}, framework, onSave) {
     languageBackground: h("input", { id: "pf-lang", value: persona.languageBackground ?? "" }),
     adversarial: h("input", { id: "pf-adv", type: "checkbox", checked: Boolean(persona.adversarial), style: "width:auto" }),
   };
-  const rapport = framework.dimensions.length ? rapportFields(framework, persona.rapport) : null;
+  const rapport = framework.dimensions.length ? rapportFields(framework, persona.rapport, rapportExtra) : null;
   const save = h("button", { class: "primary", type: "submit" }, "Save persona");
-  const dialog = h("dialog", { class: "wide" });
   const form = h("form", { onsubmit: async (e) => {
     e.preventDefault();
     const done = busy(save, "Saving…");
@@ -195,14 +196,13 @@ function personaForm(persona = {}, framework, onSave) {
         communicationStyle: f.communicationStyle.value, languageBackground: f.languageBackground.value,
         adversarial: f.adversarial.checked, rapport: rapport ? rapport.value() : {},
       });
-      dialog.close();
     } catch (err) {
       fail(err);
     } finally {
       done();
     }
   } },
-    h("h2", {}, persona.id ? "Edit persona" : "New persona"),
+    title ? h("h2", {}, title) : null,
     persona.source ? h("p", { class: "notice" }, persona.source) : null,
     h("div", { class: "field" }, h("label", { for: "pf-name" }, "Name"), f.name),
     h("div", { class: "field" }, h("label", { for: "pf-desc" }, "Who they are"), f.description),
@@ -213,14 +213,28 @@ function personaForm(persona = {}, framework, onSave) {
       h("div", { class: "field" }, h("label", { for: "pf-lang" }, "Language background"), f.languageBackground)),
     rapport?.el,
     h("div", { class: "field row" }, f.adversarial, h("label", { for: "pf-adv", style: "margin:0" }, "Adversarial (tries to break the bot)")),
-    h("p", { class: "hint" }, "What happens in a simulated conversation (for example the user asking for a human) is set per run, under Interactions → Simulate conversations."),
-    h("div", { class: "row end" }, h("button", { type: "button", onclick: () => dialog.close() }, "Cancel"), save),
+    h("p", { class: "hint" }, "What happens in a simulated conversation (for example the user asking for a human) is set per run, under Create interactions → Simulate conversations."),
+    h("div", { class: "row end" }, onCancel ? h("button", { type: "button", onclick: onCancel }, "Cancel") : null, save),
   );
+  return { form, focus: () => f.name.focus() };
+}
+
+// Editing an existing persona happens in a dialog over the list.
+function personaDialog(persona, framework, onSave) {
+  const dialog = h("dialog", { class: "wide" });
+  const { form, focus } = personaFormElement(persona, framework, {
+    title: "Edit persona",
+    onSave: async (data) => {
+      await onSave(data);
+      dialog.close();
+    },
+    onCancel: () => dialog.close(),
+  });
   dialog.append(form);
   dialog.addEventListener("close", () => dialog.remove());
   document.body.append(dialog);
   dialog.showModal();
-  f.name.focus();
+  focus();
 }
 
 function rapportSummary(p, framework) {
@@ -241,8 +255,9 @@ function rapportSummary(p, framework) {
 
 // ---------- the rapport framework editor ----------
 
-function frameworkCard(projectId, data, reload) {
+function frameworkDialog(projectId, data, reload) {
   const { framework, isDefault } = data;
+  const dialog = h("dialog", { class: "wide" });
   const name = h("input", { id: "fw-name", value: framework.name });
   const list = h("div", { class: "fw-list" });
   const addDimension = (d = { name: "", definition: "", builds: [], breaks: [] }) => {
@@ -258,42 +273,48 @@ function frameworkCard(projectId, data, reload) {
   };
   framework.dimensions.forEach(addDimension);
   const save = h("button", { class: "primary", type: "submit" }, "Save framework");
-  return h("details", { class: "card framework-card" },
-    h("summary", {}, h("strong", {}, "Rapport framework: "), framework.name, ` (${plural(framework.dimensions.length, "dimension")})`, isDefault ? h("span", { class: "badge", style: "margin-left:0.5rem" }, "default") : h("span", { class: "badge accent", style: "margin-left:0.5rem" }, "edited for this project")),
-    h("form", { onsubmit: async (e) => {
-      e.preventDefault();
-      const dimensions = [...list.querySelectorAll(".fw-dim")].map((b) => ({
-        key: b.dataset.key || undefined,
-        name: b.querySelector(".fw-dim-name").value,
-        definition: b.querySelector(".fw-def").value,
-        builds: b.querySelector(".fw-builds").value,
-        breaks: b.querySelector(".fw-breaks").value,
-      }));
-      const done = busy(save, "Saving…");
-      try {
-        await api("PUT", `/api/projects/${projectId}/framework`, { framework: { name: name.value, dimensions } });
-        toast("Framework saved.");
-        reload();
-      } catch (err) {
-        fail(err);
-        done();
-      }
-    } },
-      h("p", { class: "muted", style: "margin-top:0.8rem" }, "Personas in this project are described with these dimensions, and simulated users rate each one at the end of a conversation. Renaming a dimension keeps what personas say about it; removing one drops it from personas when they are next saved. Conversations keep the framework they were run with."),
-      h("div", { class: "field" }, h("label", { for: "fw-name" }, "Framework name"), name),
-      list,
-      h("div", { class: "row", style: "margin-top:0.8rem" },
-        save,
-        h("button", { type: "button", onclick: () => addDimension() }, "+ Add dimension"),
-        isDefault ? null : h("button", { type: "button", class: "link-button", onclick: async () => {
-          if (!(await confirmDialog("Go back to the default GAAFFE taxonomy for this project?", "Reset"))) return;
-          try {
-            await api("PUT", `/api/projects/${projectId}/framework`, { reset: true });
-            reload();
-          } catch (err) {
-            fail(err);
-          }
-        } }, "Reset to the GAAFFE taxonomy"))));
+  dialog.append(h("form", { onsubmit: async (e) => {
+    e.preventDefault();
+    const dimensions = [...list.querySelectorAll(".fw-dim")].map((b) => ({
+      key: b.dataset.key || undefined,
+      name: b.querySelector(".fw-dim-name").value,
+      definition: b.querySelector(".fw-def").value,
+      builds: b.querySelector(".fw-builds").value,
+      breaks: b.querySelector(".fw-breaks").value,
+    }));
+    const done = busy(save, "Saving…");
+    try {
+      await api("PUT", `/api/projects/${projectId}/framework`, { framework: { name: name.value, dimensions } });
+      toast("Framework saved.");
+      dialog.close();
+      reload();
+    } catch (err) {
+      fail(err);
+      done();
+    }
+  } },
+    h("h2", {}, "Rapport framework"),
+    h("p", { class: "muted" }, "Personas in this project are described with these dimensions, and simulated users rate each one at the end of a conversation. Renaming a dimension keeps what personas say about it; removing one drops it from personas when they are next saved. Conversations keep the framework they were run with."),
+    h("div", { class: "field" }, h("label", { for: "fw-name" }, "Framework name"), name),
+    list,
+    h("div", { class: "row", style: "margin-top:0.8rem" },
+      h("button", { type: "button", onclick: () => addDimension() }, "+ Add dimension"),
+      isDefault ? null : h("button", { type: "button", class: "link-button", onclick: async () => {
+        if (!(await confirmDialog("Go back to the default GAAFFE taxonomy for this project?", "Reset"))) return;
+        try {
+          await api("PUT", `/api/projects/${projectId}/framework`, { reset: true });
+          dialog.close();
+          reload();
+        } catch (err) {
+          fail(err);
+        }
+      } }, "Reset to the GAAFFE taxonomy"),
+      h("span", { class: "spacer" }),
+      h("button", { type: "button", onclick: () => dialog.close() }, "Cancel"),
+      save)));
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 // ---------- importing personas ----------
@@ -359,135 +380,103 @@ function spreadsheetImport(projectId, framework, reload) {
     h("div", { style: "margin-top:1rem" }, result));
 }
 
-function researchImport(projectId, framework, reload) {
-  let mode = "file";
-  const file = h("input", { type: "file", id: "pr-file", accept: ".txt,.md,.docx,.pdf" });
-  const text = h("textarea", { id: "pr-text", rows: 10, placeholder: "Paste interview transcripts, research notes or survey comments." });
-  const count = h("select", { id: "pr-count" }, h("option", { value: "" }, "Let the AI decide (up to 6)"), [1, 2, 3, 4, 5, 6].map((n) => h("option", { value: n }, n)));
-  const holder = h("div");
-  const panes = {
-    file: h("div", { class: "field" }, h("label", { for: "pr-file" }, "File"), file, h("div", { class: "hint" }, "Text, Word (.docx), PDF or Markdown, up to 4 MB and 150,000 characters.")),
-    paste: h("div", { class: "field" }, h("label", { for: "pr-text" }, "Research material"), text),
-  };
-  fill(holder, panes.file);
-  const modes = [["file", "Upload a file"], ["paste", "Paste text"]].map(([key, label]) => h("button", { type: "button", "data-key": key, "aria-pressed": String(key === mode), onclick: () => {
-    mode = key;
-    modes.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === key)));
-    fill(holder, panes[key]);
-  } }, label));
-  const result = h("div");
-  const find = h("button", { type: "submit" }, "Find user types");
-  return h("form", { onsubmit: async (e) => {
-    e.preventDefault();
-    const done = busy(find, "Reading the material…");
-    try {
-      let body;
-      let sourceLabel;
-      if (mode === "file") {
-        const f = file.files[0];
-        if (!f) throw new Error("Choose a file first.");
-        body = { filename: f.name, contentBase64: await fileToBase64(f) };
-        sourceLabel = f.name;
-      } else {
-        body = { text: text.value };
-        sourceLabel = "pasted research material";
-      }
-      const { types, text: material } = await api("POST", `/api/projects/${projectId}/personas/research/types`, { ...body, count: count.value || undefined });
-      const boxes = types.map((t, i) => h("input", { type: "checkbox", id: `rt-${i}`, checked: true, style: "width:auto" }));
-      const draft = h("button", { class: "primary", type: "button", onclick: async () => {
-        const chosen = types.filter((_, i) => boxes[i].checked);
-        if (!chosen.length) return toast("Tick at least one user type.", "error");
-        let made = 0;
-        let dropped = 0;
-        draft.disabled = true;
-        for (const type of chosen) {
-          draft.textContent = `Drafting ${made + 1} of ${chosen.length}…`;
-          try {
-            const r = await api("POST", `/api/projects/${projectId}/personas/research/draft`, { text: material, type, sourceLabel });
-            made++;
-            dropped += r.droppedQuotes;
-          } catch (err) {
-            fail(err);
-          }
-        }
-        toast(`Drafted ${plural(made, "persona")}.${dropped ? ` ${plural(dropped, "quote")} that could not be found word for word in your material ${dropped === 1 ? "was" : "were"} left out.` : ""} Check them against your data.`);
-        reload();
-      } }, "Draft these personas");
-      fill(result,
-        h("p", {}, "The AI found these user types. Tick the ones to turn into personas; each is drafted with your framework and supporting quotes."),
-        h("div", { class: "type-list" }, types.map((t, i) => h("label", { class: "check type", for: `rt-${i}` }, boxes[i], h("span", {}, h("strong", {}, t.name), h("br"), h("span", { class: "small muted" }, t.summary))))),
-        h("div", { class: "row", style: "margin-top:0.6rem" }, draft));
-    } catch (err) {
-      fail(err);
-    } finally {
-      done();
-    }
-  } },
-    h("p", { class: "muted" }, "The AI reads your research material, finds the distinct types of user in it, and drafts a persona for each, described with your rapport framework. Each dimension can carry supporting quotes; quotes that do not appear word for word in your material are removed automatically. Drafts are labelled as AI drafts for you to check."),
-    h("p", { class: "notice warn small" }, "Research material is sent to Claude (Anthropic's API) for this. Remove names and other identifying details first, in line with your ethics approval."),
-    h("div", { class: "segmented", role: "group", "aria-label": "How to add material" }, modes),
-    holder,
-    h("div", { class: "field" }, h("label", { for: "pr-count" }, "How many personas"), count),
-    find,
-    h("div", { style: "margin-top:1rem" }, result));
-}
+const PERSONA_PARTS = [
+  ["new", "Generate manually"],
+  ["starter", "Add starter set"],
+  ["generate", "Generate from brief"],
+  ["import", "Import a spreadsheet"],
+  ["created", "Created personas"],
+];
 
-export async function personasTab(body, projectId) {
+export async function personasTab(body, projectId, _overview, extra = []) {
+  const part = PERSONA_PARTS.find(([k]) => k === extra[0])?.[0];
+  if (!part) {
+    location.replace(`#/p/${projectId}/personas/new`);
+    return;
+  }
   const [{ personas }, fw] = await Promise.all([
     api("GET", `/api/projects/${projectId}/personas`),
     api("GET", `/api/projects/${projectId}/framework`),
   ]);
   const framework = fw.framework;
-  const reload = () => personasTab(body, projectId).catch(fail);
-
-  const starter = h("button", { onclick: async () => {
-    const done = busy(starter, "Adding…");
-    try {
-      const { added } = await api("POST", `/api/projects/${projectId}/personas/starter`);
-      toast(added ? `Added ${plural(added, "starter persona")}.` : "The starter personas are already here.");
-      reload();
-    } catch (err) {
-      fail(err);
-      done();
-    }
-  } }, "Add starter set");
-
-  // Ways to add personas beyond writing one: generate, spreadsheet, research text.
-  const brief = h("input", { id: "gen-brief", placeholder: "e.g. older adults applying for a bus pass, with mixed digital skills" });
-  const genCount = h("select", { id: "gen-count", "aria-label": "How many" }, [1, 2, 3, 4, 5].map((n) => h("option", { value: n, selected: n === 3 }, n)));
-  const genButton = h("button", { type: "submit" }, "Generate");
-  const generate = h("form", { onsubmit: async (e) => {
-    e.preventDefault();
-    const done = busy(genButton, "Generating…");
-    try {
-      const { personas: made } = await api("POST", `/api/projects/${projectId}/personas/generate`, { brief: brief.value, count: Number(genCount.value) });
-      toast(`Created ${plural(made.length, "persona")}. Check and edit them below.`);
-      reload();
-    } catch (err) {
-      fail(err);
-      done();
-    }
-  } },
-    h("p", { class: "muted" }, "Describe the kind of users you need. The AI drafts personas, including their rapport needs, for you to check and edit."),
-    h("div", { class: "row" }, h("div", { style: "flex:1;min-width:220px" }, h("label", { for: "gen-brief" }, "Brief"), brief), h("div", {}, h("label", { for: "gen-count" }, "How many"), genCount)),
-    h("div", { class: "row", style: "margin-top:0.6rem" }, genButton));
-
-  const adders = {
-    generate: ["Generate from a brief", () => generate],
-    spreadsheet: ["Import a spreadsheet", () => spreadsheetImport(projectId, framework, reload)],
-    research: ["Draft from research text", () => researchImport(projectId, framework, reload)],
+  const reload = () => personasTab(body, projectId, _overview, extra).catch(fail);
+  // After adding personas, show them in the list.
+  const showCreated = () => {
+    if (part === "created") reload();
+    else location.hash = `#/p/${projectId}/personas/created`;
   };
-  let current = sessionStorageGet("cdw-persona-adder") || "generate";
-  if (!adders[current]) current = "generate";
-  const adderHolder = h("div");
-  const adderButtons = Object.entries(adders).map(([key, [label]]) => h("button", { type: "button", "data-key": key, onclick: () => showAdder(key) }, label));
-  const showAdder = (key) => {
-    current = key;
-    sessionStorageSet("cdw-persona-adder", key);
-    adderButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === key)));
-    fill(adderHolder, adders[key][1]());
-  };
-  showAdder(current);
+  const subtabs = h("nav", { class: "subtabs", "aria-label": "Ways to add personas" },
+    PERSONA_PARTS.map(([k, label]) => h("a", { href: `#/p/${projectId}/personas/${k}`, class: k === part ? "active" : "", "aria-current": k === part ? "page" : null }, label)));
+
+  let panel;
+  if (part === "new") {
+    const editFramework = h("button", { type: "button", class: "link-button small", onclick: () => frameworkDialog(projectId, fw, reload) },
+      fw.isDefault ? "Edit framework" : "Edit framework (edited for this project)");
+    const { form } = personaFormElement({}, framework, {
+      rapportExtra: editFramework,
+      onSave: async (data) => {
+        await api("POST", `/api/projects/${projectId}/personas`, data);
+        toast("Persona created.");
+        showCreated();
+      },
+    });
+    panel = h("div", { class: "card" },
+      h("h2", {}, "Generate manually"),
+      h("p", { class: "muted" }, "Personas are the simulated users who talk to your bot. Describe one yourself here; you can also add the starter set, generate personas from a brief, or import a spreadsheet."),
+      form);
+  } else if (part === "starter") {
+    const { personas: starters } = await api("GET", `/api/projects/${projectId}/personas/starter`);
+    const missing = starters.filter((p) => !p.added);
+    const add = async (names, button) => {
+      const done = busy(button, "Adding…");
+      try {
+        const { added } = await api("POST", `/api/projects/${projectId}/personas/starter`, names ? { names } : {});
+        toast(added ? `Added ${plural(added, "starter persona")}.` : "Already in this project.");
+        showCreated();
+      } catch (err) {
+        fail(err);
+        done();
+      }
+    };
+    const addAll = h("button", { class: "primary", type: "button", disabled: !missing.length, onclick: () => add(null, addAll) },
+      missing.length ? `Add all ${missing.length === starters.length ? starters.length : `${missing.length} remaining`}` : "All added");
+    panel = h("div", { class: "card" },
+      h("h2", {}, "Add starter set"),
+      h("p", { class: "muted" }, `Eight ready-made personas to start from, two of them adversarial (they try to break the bot). Once added, they are ordinary personas: edit them under Created personas, for example to add rapport needs.`),
+      h("div", { class: "row", style: "margin-bottom:1rem" }, addAll),
+      h("div", { class: "persona-grid" }, starters.map((p) => {
+        const button = h("button", { type: "button", disabled: p.added, onclick: () => add([p.name], button) }, p.added ? "Added" : "Add");
+        return h("div", { class: `card persona-card ${p.added ? "is-added" : ""}` },
+          h("div", { class: "row" }, h("strong", {}, p.name), p.adversarial ? h("span", { class: "badge danger" }, "adversarial") : null,
+            h("span", { class: "spacer" }), p.added ? h("span", { class: "badge ok" }, "in this project") : null),
+          h("p", { style: "margin:0.4rem 0" }, p.description),
+          p.communicationStyle ? h("p", { class: "small" }, h("strong", {}, "Writes: "), p.communicationStyle) : null,
+          p.languageBackground ? h("p", { class: "small" }, h("strong", {}, "Language: "), p.languageBackground) : null,
+          h("div", { class: "row" }, button));
+      })));
+  } else if (part === "generate") {
+    const brief = h("input", { id: "gen-brief", placeholder: "e.g. older adults applying for a bus pass, with mixed digital skills" });
+    const genCount = h("select", { id: "gen-count", "aria-label": "How many" }, [1, 2, 3, 4, 5].map((n) => h("option", { value: n, selected: n === 3 }, n)));
+    const genButton = h("button", { class: "primary", type: "submit" }, "Generate");
+    panel = h("form", { class: "card", onsubmit: async (e) => {
+      e.preventDefault();
+      const done = busy(genButton, "Generating…");
+      try {
+        const { personas: made } = await api("POST", `/api/projects/${projectId}/personas/generate`, { brief: brief.value, count: Number(genCount.value) });
+        toast(`Created ${plural(made.length, "persona")}. Check and edit them.`);
+        showCreated();
+      } catch (err) {
+        fail(err);
+        done();
+      }
+    } },
+      h("h2", {}, "Generate from brief"),
+      h("p", { class: "muted" }, "Describe the kind of users you need. The AI drafts personas, including their rapport needs, for you to check and edit."),
+      h("div", { class: "row" }, h("div", { style: "flex:1;min-width:220px" }, h("label", { for: "gen-brief" }, "Brief"), brief), h("div", {}, h("label", { for: "gen-count" }, "How many"), genCount)),
+      h("div", { class: "row", style: "margin-top:0.6rem" }, genButton));
+  } else if (part === "import") {
+    panel = h("div", { class: "card" }, h("h2", {}, "Import a spreadsheet"), spreadsheetImport(projectId, framework, showCreated));
+  }
 
   const cards = personas.map((p) => h("div", { class: "card persona-card" },
     h("div", { class: "row" }, h("strong", {}, p.name), p.adversarial ? h("span", { class: "badge danger" }, "adversarial") : null,
@@ -500,7 +489,7 @@ export async function personasTab(body, projectId) {
     p.languageBackground ? h("p", { class: "small" }, h("strong", {}, "Language: "), p.languageBackground) : null,
     rapportSummary(p, framework),
     h("div", { class: "row" },
-      h("button", { onclick: () => personaForm(p, framework, async (data) => { await api("PATCH", `/api/personas/${p.id}`, data); toast("Persona saved."); reload(); }) }, "Edit"),
+      h("button", { onclick: () => personaDialog(p, framework, async (data) => { await api("PATCH", `/api/personas/${p.id}`, data); toast("Persona saved."); reload(); }) }, "Edit"),
       h("button", { onclick: async () => { try { await api("POST", `/api/personas/${p.id}/duplicate`); reload(); } catch (err) { fail(err); } } }, "Duplicate"),
       h("button", { class: "link-button danger", onclick: async () => {
         if (!(await confirmDialog(`Delete the persona “${p.name}”? Conversations already run with it keep a copy of it.`))) return;
@@ -513,17 +502,15 @@ export async function personasTab(body, projectId) {
       } }, "Delete")),
   ));
 
-  fill(body,
-    h("div", { class: "card" },
-      h("h2", {}, "Personas"),
-      h("p", { class: "muted" }, "Personas are the simulated users who talk to your bot. Write your own, start from the starter set (which includes two adversarial ones), generate some with AI, or import them from your user research."),
-      h("div", { class: "row" },
-        h("button", { class: "primary", onclick: () => personaForm({}, framework, async (data) => { await api("POST", `/api/projects/${projectId}/personas`, data); toast("Persona created."); reload(); }) }, "New persona"),
-        starter)),
-    frameworkCard(projectId, fw, reload),
-    h("div", { class: "card" }, h("h2", {}, "Add personas"), h("div", { class: "segmented wrap", role: "group", "aria-label": "How to add personas" }, adderButtons), adderHolder),
-    personas.length ? h("div", { class: "persona-grid" }, cards) : h("div", { class: "card empty" }, "No personas yet."),
-  );
+  if (part === "created") {
+    fill(body, subtabs,
+      h("div", { class: "row", style: "margin-bottom:0.8rem" }, h("h2", { style: "margin:0" }, `Created personas (${personas.length})`)),
+      personas.length
+        ? h("div", { class: "persona-grid" }, cards)
+        : h("div", { class: "card empty" }, h("p", {}, "No personas yet."), h("p", { class: "small" }, "Write one under Generate manually, add the starter set, generate some from a brief, or import a spreadsheet.")));
+    return;
+  }
+  fill(body, subtabs, panel);
 }
 
 // ---------- create interactions: four panels ----------
@@ -783,35 +770,37 @@ function importPanel(ctx) {
 // ---------- interactions page ----------
 
 // The "Simulated interactions" tab: the four ways of creating interactions, and their runs.
-export async function createTab(body, projectId) {
-  const [{ runs }, { personas }, { versions }] = await Promise.all([
+// The four ways of creating interactions, as sub-tabs (each with its own address), and
+// which runs belong under each.
+const MAKERS = [
+  ["simulate", "Simulate conversations", simulatePanel, "simulated"],
+  ["questions", "Test questions", questionsPanel, "questions"],
+  ["write", "Write a conversation", writePanel, null],
+  ["import", "Import transcripts", importPanel, "import"],
+];
+
+export async function createTab(body, projectId, _overview, extra = []) {
+  const maker = MAKERS.find(([k]) => k === extra[0]);
+  if (!maker) {
+    location.replace(`#/p/${projectId}/create/simulate`);
+    return;
+  }
+  const [key, name, panel, runKind] = maker;
+  const [{ runs: allRuns }, { personas }, { versions }] = await Promise.all([
     api("GET", `/api/projects/${projectId}/runs`),
     api("GET", `/api/projects/${projectId}/personas`),
     api("GET", `/api/projects/${projectId}/bot`),
   ]);
-  const refresh = () => createTab(body, projectId).catch(fail);
+  const refresh = () => createTab(body, projectId, _overview, extra).catch(fail);
   const area = h("div");
   const ctx = { projectId, versions, personas, refresh, area };
+  const subtabs = h("nav", { class: "subtabs", "aria-label": "Ways to create interactions" },
+    MAKERS.map(([k, label]) => h("a", { href: `#/p/${projectId}/create/${k}`, class: k === key ? "active" : "", "aria-current": k === key ? "page" : null }, label)));
+  const createCard = h("div", { class: "card" }, h("h2", {}, name), panel(ctx));
 
-  // Create interactions
-  const makers = { simulate: ["Simulate conversations", simulatePanel], questions: ["Test questions", questionsPanel], write: ["Write a conversation", writePanel], import: ["Import transcripts", importPanel] };
-  let current = sessionStorageGet("cdw-maker") || "simulate";
-  if (!makers[current]) current = "simulate";
-  const panelHolder = h("div");
-  const showMaker = (key) => {
-    current = key;
-    sessionStorageSet("cdw-maker", key);
-    makerButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === key)));
-    fill(panelHolder, makers[key][1](ctx));
-  };
-  const makerButtons = Object.entries(makers).map(([key, [name]]) => h("button", { type: "button", "data-key": key, onclick: () => showMaker(key) }, name));
-  const createCard = h("div", { class: "card" },
-    h("p", { class: "muted", style: "margin-top:0" }, "Choose how to create interactions. Everything created here is collected under Interactions, together with test chats and conversations with real users."),
-    h("div", { class: "segmented wrap", role: "group", "aria-label": "How to create" }, makerButtons), panelHolder);
-  showMaker(current);
-
-  // Runs
-  const runRows = runs.filter((r) => r.kind !== "import" || r.total).map((r) => h("tr", {},
+  // Runs of this kind (simulations, test questions or imports).
+  const runs = runKind ? allRuns.filter((r) => r.kind === runKind && (r.kind !== "import" || r.total)) : [];
+  const runRows = runs.map((r) => h("tr", {},
     h("td", {}, h("a", { href: `#/p/${projectId}/interactions?runId=${r.id}` }, r.label)),
     h("td", { class: "small" }, { simulated: "simulation", questions: "test questions", import: "import" }[r.kind] ?? r.kind),
     h("td", { class: "small" }, `${r.done} of ${r.total} finished${r.failed ? `, ${r.failed} failed` : ""}`),
@@ -827,13 +816,14 @@ export async function createTab(body, projectId) {
           fail(err);
         }
       } }, "Delete")))));
-  const runsCard = runs.length ? h("div", { class: "card" }, h("h2", {}, "Runs and imports"),
-    h("p", { class: "small muted" }, "Click a run to see its conversations under Interactions."),
+  const runsTitle = { simulated: "Simulation runs", questions: "Test question runs", import: "Imports" }[runKind];
+  const runsCard = runs.length ? h("div", { class: "card" }, h("h2", {}, runsTitle),
+    h("p", { class: "small muted" }, "Click one to see its conversations under Interactions. Everything you create is collected there."),
     h("div", { class: "table-wrap" }, h("table", {},
       h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Kind"), h("th", {}, "Progress"), h("th", {}, "Started"), h("th", {}, ""))),
       h("tbody", {}, runRows)))) : null;
 
-  fill(body, createCard, area, runsCard);
+  fill(body, subtabs, createCard, area, runsCard);
 }
 
 // The "Interactions" tab: everything collected, from every source, with filters.
@@ -902,21 +892,6 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
   fill(body, listCard);
 }
 
-function sessionStorageGet(key) {
-  try {
-    return sessionStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-function sessionStorageSet(key, value) {
-  try {
-    sessionStorage.setItem(key, value);
-  } catch {
-    // Storage can be blocked; the page works without it.
-  }
-}
-
 async function conversationDetail(body, projectId, conversationId) {
   const { conversation: c, settings, messages } = await api("GET", `/api/conversations/${conversationId}`);
   const meta = c.meta ?? {};
@@ -966,7 +941,7 @@ async function conversationDetail(body, projectId, conversationId) {
     h("p", {}, h("a", { href: `#/p/${projectId}/interactions` }, "← All interactions")),
     h("div", { class: "card" },
       h("div", { class: "row" }, h("h2", { style: "margin:0" }, c.title || "(untitled)"), h("span", { class: "spacer" }),
-        meta.kind === "live" ? h("a", { class: "button", href: `#/p/${projectId}/chat/${c.id}` }, "Continue in Test chat") : null,
+        meta.kind === "live" ? h("a", { class: "button", href: `#/p/${projectId}/chat/test/${c.id}` }, "Continue in Test chat") : null,
         h("button", { class: "link-button danger", onclick: async () => {
           if (!(await confirmDialog("Delete this conversation?"))) return;
           try {
