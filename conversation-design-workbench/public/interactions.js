@@ -380,7 +380,13 @@ function spreadsheetImport(projectId, framework, reload) {
     h("div", { style: "margin-top:1rem" }, result));
 }
 
-const PERSONA_PARTS = [["new", "New persona"], ["generate", "Generate from brief"], ["import", "Import a spreadsheet"]];
+const PERSONA_PARTS = [
+  ["new", "Generate manually"],
+  ["starter", "Add starter set"],
+  ["generate", "Generate from brief"],
+  ["import", "Import a spreadsheet"],
+  ["created", "Created personas"],
+];
 
 export async function personasTab(body, projectId, _overview, extra = []) {
   const part = PERSONA_PARTS.find(([k]) => k === extra[0])?.[0];
@@ -394,6 +400,11 @@ export async function personasTab(body, projectId, _overview, extra = []) {
   ]);
   const framework = fw.framework;
   const reload = () => personasTab(body, projectId, _overview, extra).catch(fail);
+  // After adding personas, show them in the list.
+  const showCreated = () => {
+    if (part === "created") reload();
+    else location.hash = `#/p/${projectId}/personas/created`;
+  };
   const subtabs = h("nav", { class: "subtabs", "aria-label": "Ways to add personas" },
     PERSONA_PARTS.map(([k, label]) => h("a", { href: `#/p/${projectId}/personas/${k}`, class: k === part ? "active" : "", "aria-current": k === part ? "page" : null }, label)));
 
@@ -406,25 +417,43 @@ export async function personasTab(body, projectId, _overview, extra = []) {
       onSave: async (data) => {
         await api("POST", `/api/projects/${projectId}/personas`, data);
         toast("Persona created.");
-        reload();
+        showCreated();
       },
     });
-    const starter = h("button", { type: "button", onclick: async () => {
-      const done = busy(starter, "Adding…");
+    panel = h("div", { class: "card" },
+      h("h2", {}, "Generate manually"),
+      h("p", { class: "muted" }, "Personas are the simulated users who talk to your bot. Describe one yourself here; you can also add the starter set, generate personas from a brief, or import a spreadsheet."),
+      form);
+  } else if (part === "starter") {
+    const { personas: starters } = await api("GET", `/api/projects/${projectId}/personas/starter`);
+    const missing = starters.filter((p) => !p.added);
+    const add = async (names, button) => {
+      const done = busy(button, "Adding…");
       try {
-        const { added } = await api("POST", `/api/projects/${projectId}/personas/starter`);
-        toast(added ? `Added ${plural(added, "starter persona")}.` : "The starter personas are already here.");
-        reload();
+        const { added } = await api("POST", `/api/projects/${projectId}/personas/starter`, names ? { names } : {});
+        toast(added ? `Added ${plural(added, "starter persona")}.` : "Already in this project.");
+        showCreated();
       } catch (err) {
         fail(err);
         done();
       }
-    } }, "Add the starter set");
+    };
+    const addAll = h("button", { class: "primary", type: "button", disabled: !missing.length, onclick: () => add(null, addAll) },
+      missing.length ? `Add all ${missing.length === starters.length ? starters.length : `${missing.length} remaining`}` : "All added");
     panel = h("div", { class: "card" },
-      h("h2", {}, "New persona"),
-      h("p", { class: "muted" }, "Personas are the simulated users who talk to your bot. Describe one below, or add the ready-made starter set of eight (two of them adversarial) and edit those."),
-      h("div", { class: "row", style: "margin-bottom:1rem" }, starter),
-      form);
+      h("h2", {}, "Add starter set"),
+      h("p", { class: "muted" }, `Eight ready-made personas to start from, two of them adversarial (they try to break the bot). Once added, they are ordinary personas: edit them under Created personas, for example to add rapport needs.`),
+      h("div", { class: "row", style: "margin-bottom:1rem" }, addAll),
+      h("div", { class: "persona-grid" }, starters.map((p) => {
+        const button = h("button", { type: "button", disabled: p.added, onclick: () => add([p.name], button) }, p.added ? "Added" : "Add");
+        return h("div", { class: `card persona-card ${p.added ? "is-added" : ""}` },
+          h("div", { class: "row" }, h("strong", {}, p.name), p.adversarial ? h("span", { class: "badge danger" }, "adversarial") : null,
+            h("span", { class: "spacer" }), p.added ? h("span", { class: "badge ok" }, "in this project") : null),
+          h("p", { style: "margin:0.4rem 0" }, p.description),
+          p.communicationStyle ? h("p", { class: "small" }, h("strong", {}, "Writes: "), p.communicationStyle) : null,
+          p.languageBackground ? h("p", { class: "small" }, h("strong", {}, "Language: "), p.languageBackground) : null,
+          h("div", { class: "row" }, button));
+      })));
   } else if (part === "generate") {
     const brief = h("input", { id: "gen-brief", placeholder: "e.g. older adults applying for a bus pass, with mixed digital skills" });
     const genCount = h("select", { id: "gen-count", "aria-label": "How many" }, [1, 2, 3, 4, 5].map((n) => h("option", { value: n, selected: n === 3 }, n)));
@@ -434,8 +463,8 @@ export async function personasTab(body, projectId, _overview, extra = []) {
       const done = busy(genButton, "Generating…");
       try {
         const { personas: made } = await api("POST", `/api/projects/${projectId}/personas/generate`, { brief: brief.value, count: Number(genCount.value) });
-        toast(`Created ${plural(made.length, "persona")}. Check and edit them below.`);
-        reload();
+        toast(`Created ${plural(made.length, "persona")}. Check and edit them.`);
+        showCreated();
       } catch (err) {
         fail(err);
         done();
@@ -445,8 +474,8 @@ export async function personasTab(body, projectId, _overview, extra = []) {
       h("p", { class: "muted" }, "Describe the kind of users you need. The AI drafts personas, including their rapport needs, for you to check and edit."),
       h("div", { class: "row" }, h("div", { style: "flex:1;min-width:220px" }, h("label", { for: "gen-brief" }, "Brief"), brief), h("div", {}, h("label", { for: "gen-count" }, "How many"), genCount)),
       h("div", { class: "row", style: "margin-top:0.6rem" }, genButton));
-  } else {
-    panel = h("div", { class: "card" }, h("h2", {}, "Import a spreadsheet"), spreadsheetImport(projectId, framework, reload));
+  } else if (part === "import") {
+    panel = h("div", { class: "card" }, h("h2", {}, "Import a spreadsheet"), spreadsheetImport(projectId, framework, showCreated));
   }
 
   const cards = personas.map((p) => h("div", { class: "card persona-card" },
@@ -473,12 +502,15 @@ export async function personasTab(body, projectId, _overview, extra = []) {
       } }, "Delete")),
   ));
 
-  fill(body,
-    subtabs,
-    panel,
-    h("h2", { class: "section-title" }, `Personas in this project (${personas.length})`),
-    personas.length ? h("div", { class: "persona-grid" }, cards) : h("div", { class: "card empty" }, "No personas yet."),
-  );
+  if (part === "created") {
+    fill(body, subtabs,
+      h("div", { class: "row", style: "margin-bottom:0.8rem" }, h("h2", { style: "margin:0" }, `Created personas (${personas.length})`)),
+      personas.length
+        ? h("div", { class: "persona-grid" }, cards)
+        : h("div", { class: "card empty" }, h("p", {}, "No personas yet."), h("p", { class: "small" }, "Write one under Generate manually, add the starter set, generate some from a brief, or import a spreadsheet.")));
+    return;
+  }
+  fill(body, subtabs, panel);
 }
 
 // ---------- create interactions: four panels ----------

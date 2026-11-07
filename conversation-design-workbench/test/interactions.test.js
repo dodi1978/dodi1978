@@ -238,3 +238,16 @@ test("deleting a run deletes its conversations", async (t) => {
   assert.equal((await call("DELETE", `/api/runs/${run.data.run.id}`)).status, 200);
   assert.equal((await call("GET", `/api/projects/${projectId}/conversations`)).data.conversations.length, 0);
 });
+
+test("starter personas can be listed and added one at a time or all together", async (t) => {
+  const { call, projectId } = await setup(t);
+  const list = await call("GET", `/api/projects/${projectId}/personas/starter`);
+  assert.equal(list.data.personas.length, 8);
+  assert.ok(list.data.personas.every((p) => p.added === false));
+  const one = await call("POST", `/api/projects/${projectId}/personas/starter`, { names: ["Busy professional"] });
+  assert.equal(one.data.added, 1);
+  const after = await call("GET", `/api/projects/${projectId}/personas/starter`);
+  assert.deepEqual(after.data.personas.filter((p) => p.added).map((p) => p.name), ["Busy professional"]);
+  const rest = await call("POST", `/api/projects/${projectId}/personas/starter`, {});
+  assert.equal(rest.data.added, 7, "adding all skips the ones already there");
+});

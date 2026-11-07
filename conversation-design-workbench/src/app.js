@@ -88,6 +88,7 @@ function routes() {
     ["POST", "/api/conversations/:id/messages", sendMessage],
     ["GET", "/api/projects/:id/personas", listPersonas],
     ["POST", "/api/projects/:id/personas", createPersona],
+    ["GET", "/api/projects/:id/personas/starter", listStarterPersonas],
     ["POST", "/api/projects/:id/personas/starter", addStarterPersonas],
     ["POST", "/api/projects/:id/personas/generate", generatePersonasRoute],
     ["PATCH", "/api/personas/:id", updatePersona],
@@ -617,12 +618,24 @@ async function createPersona({ db }, { id }, body) {
   return { persona: await insertPersona(db, id, body.persona ?? body) };
 }
 
-async function addStarterPersonas({ db }, { id }) {
+async function existingNames(db, projectId) {
+  return new Set((await db.query("SELECT data->>'name' AS name FROM personas WHERE project_id = $1", [projectId])).map((r) => r.name));
+}
+
+async function listStarterPersonas({ db }, { id }) {
   await loadProject(db, id);
-  const existing = new Set((await db.query("SELECT data->>'name' AS name FROM personas WHERE project_id = $1", [id])).map((r) => r.name));
+  const existing = await existingNames(db, id);
+  return { personas: STARTER_PERSONAS.map((p) => ({ ...p, added: existing.has(p.name) })) };
+}
+
+// body.names: add only these starter personas; without it, add all that are not there yet.
+async function addStarterPersonas({ db }, { id }, body) {
+  await loadProject(db, id);
+  const existing = await existingNames(db, id);
+  const wanted = Array.isArray(body?.names) ? new Set(body.names.map(String)) : null;
   let added = 0;
   for (const persona of STARTER_PERSONAS) {
-    if (existing.has(persona.name)) continue;
+    if (existing.has(persona.name) || (wanted && !wanted.has(persona.name))) continue;
     await insertPersona(db, id, persona);
     added++;
   }
