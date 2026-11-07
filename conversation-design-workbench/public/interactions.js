@@ -966,7 +966,7 @@ async function conversationDetail(body, projectId, conversationId) {
     h("p", {}, h("a", { href: `#/p/${projectId}/interactions` }, "← All interactions")),
     h("div", { class: "card" },
       h("div", { class: "row" }, h("h2", { style: "margin:0" }, c.title || "(untitled)"), h("span", { class: "spacer" }),
-        meta.kind === "live" ? h("a", { class: "button", href: `#/p/${projectId}/chat/${c.id}` }, "Continue in Test chat") : null,
+        meta.kind === "live" ? h("a", { class: "button", href: `#/p/${projectId}/chat/test/${c.id}` }, "Continue in Test chat") : null,
         h("button", { class: "link-button danger", onclick: async () => {
           if (!(await confirmDialog("Delete this conversation?"))) return;
           try {

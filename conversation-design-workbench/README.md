@@ -34,14 +34,14 @@ A web app for conversation designers and researchers: build a RAG chatbot over y
 |---|---|
 | Overview | Project details, counts, API cost, recent activity |
 | Chatbot design | **RAG** (documents, indexing, try the search) and **System settings** (instructions, model, versions) |
-| Test chat | Chat with the bot yourself, and **Share with real users** (the public chat link) |
+| Chat | **Real user chat** (the link for participants, its settings, and recent chats with real users) and **Test chat** (chat with the bot yourself) |
 | Personas | Personas, the rapport framework, and adding personas (brief, spreadsheet, research text) |
 | Create interactions | All the tools for creating interactions: simulate conversations, test questions, write a conversation, import transcripts; and the runs |
 | Interactions | Every interaction, simulated or real, labelled by type (real users set apart from those created in the workbench), with counts per type, filters and a page per conversation |
 
 ## Real users (public chat link)
 
-Under Test chat → Share with real users, a project gets a link (`/c/<code>`) that participants open without the passphrase. They see an information text and, optionally, a consent statement to agree to; then they chat with the chosen bot version, and can end the chat or press "Talk to a person" (recorded as an escalation). At the end they can give a 1–5 satisfaction rating with a comment. Conversations are saved as source `real`, with consent time, how the chat ended and the rating; chats closed without ending are shown as "not ended". Participants never see passages or settings. Limits per link: chats per 24 hours and messages per chat. The link can be switched off or replaced (the old one then stops working).
+Under Chat → Real user chat, every project has a link (switched off until you switch it on) (`/c/<code>`) that participants open without the passphrase. They see an information text and, optionally, a consent statement to agree to; then they chat with the chosen bot version, and can end the chat or press "Talk to a person" (recorded as an escalation). At the end they can give a 1–5 satisfaction rating with a comment. Conversations are saved as source `real`, with consent time, how the chat ended and the rating; chats closed without ending are shown as "not ended". Participants never see passages or settings. Limits per link: chats per 24 hours and messages per chat. The link can be switched off or replaced (the old one then stops working).
 
 ## Configuration (environment variables)
 

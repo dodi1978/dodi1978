@@ -21,10 +21,13 @@ test("a shared link lets real users chat, and their chats are collected", async 
   const pub = visitor(call);
 
   const off = await call("GET", `/api/projects/${projectId}/share`);
-  assert.equal(off.data.share, null, "not set up until saved");
+  assert.equal(off.data.share.enabled, false, "every project has a link from the start, switched off");
+  assert.equal((await call("GET", `/api/projects/${projectId}/share`)).data.share.token, off.data.share.token, "the link stays the same");
+  assert.equal((await pub("GET", `/api/public/${off.data.share.token}`)).status, 404, "a switched-off link shows nothing");
 
   const saved = await call("PUT", `/api/projects/${projectId}/share`, { share: { enabled: true, title: "Clinic helper", maxMessages: 2 } });
   const token = saved.data.share.token;
+  assert.equal(token, off.data.share.token, "switching it on keeps the link already shown");
   assert.match(token, /^[A-Za-z0-9_-]{20,}$/);
 
   const config = await pub("GET", `/api/public/${token}`);

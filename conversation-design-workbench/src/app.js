@@ -1091,7 +1091,12 @@ async function shareOut(db, project) {
 }
 
 async function getShare({ db }, { id }) {
-  return shareOut(db, await loadProject(db, id));
+  let project = await loadProject(db, id);
+  if (!project.share) {
+    await db.query("UPDATE projects SET share = $2 WHERE id = $1 AND share IS NULL", [id, JSON.stringify(sanitiseShare({}, {}))]);
+    project = await loadProject(db, id);
+  }
+  return shareOut(db, project);
 }
 
 async function saveShare({ db }, { id }, body) {
