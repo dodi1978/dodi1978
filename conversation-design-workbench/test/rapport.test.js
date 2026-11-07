@@ -110,24 +110,3 @@ test("the importer reports what it could not match", () => {
   const { personas } = personasFromRows([["Name", "Ethicality importance"], ["A", "1"], ["B", "3"]], GAAFFE);
   assert.deepEqual(personas.map((p) => p.rapport.ethicality.importance), ["low", "high"], "scale 1-3 detected from the column");
 });
-
-test("personas are drafted from research text, with only verifiable quotes kept", async (t) => {
-  const { call, projectId } = await setup(t);
-  const research = "Interview 3. Carer, 58.\n" + "I look after my mum and the booking system confuses me. I like to decide for myself when appointments are, not be told. ".repeat(4);
-  const tooShort = await call("POST", `/api/projects/${projectId}/personas/research/types`, { text: "Too short." });
-  assert.equal(tooShort.status, 400);
-  const types = await call("POST", `/api/projects/${projectId}/personas/research/types`, { text: research, count: 2 });
-  assert.equal(types.status, 200, JSON.stringify(types.data));
-  assert.equal(types.data.types.length, 2);
-  const draft = await call("POST", `/api/projects/${projectId}/personas/research/draft`, { text: types.data.text, type: types.data.types[0], sourceLabel: "interviews.txt" });
-  assert.equal(draft.status, 200, JSON.stringify(draft.data));
-  assert.equal(draft.data.droppedQuotes, 1, "the invented quote is removed");
-  const p = draft.data.persona;
-  assert.deepEqual(p.rapport.autonomy.evidence, ["I like to decide for myself"]);
-  assert.equal(p.rapport.autonomy.importance, "high");
-  assert.equal(p.rapport.goals.importance, "", "'unclear' is stored as not stated");
-  assert.match(p.source, /Drafted by AI from interviews\.txt/);
-
-  const fromFile = await call("POST", `/api/projects/${projectId}/personas/research/types`, { filename: "notes.txt", contentBase64: b64(research) });
-  assert.equal(fromFile.status, 200);
-});

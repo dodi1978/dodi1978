@@ -201,7 +201,7 @@ export async function generateQuestions(claude, { model, effort = "low", count, 
 }
 
 // A persona's descriptive fields, plus a rapport profile for the project's framework.
-function personaItemSchema(framework, { evidence = false } = {}) {
+function personaItemSchema(framework) {
   const dims = framework?.dimensions ?? [];
   const item = {
     type: "object",
@@ -221,7 +221,6 @@ function personaItemSchema(framework, { evidence = false } = {}) {
       importance: { type: "string", enum: [...IMPORTANCE, "unclear"], description: "How much this aspect of rapport matters to this user." },
       note: { type: "string", description: "What this user needs or reacts to on this dimension, in one or two sentences." },
     };
-    if (evidence) dimProps.evidence = { type: "array", items: { type: "string" }, description: "Up to 3 short quotes copied word for word from the research material that support this. Empty if there is no direct evidence." };
     item.properties.rapport = {
       type: "object",
       properties: Object.fromEntries(dims.map((d) => [d.key, { type: "object", properties: dimProps, required: Object.keys(dimProps), additionalProperties: false }])),
@@ -263,49 +262,4 @@ export async function generatePersonas(claude, { model, effort = "low", brief, c
   const schema = { type: "object", properties: { personas: { type: "array", items: personaItemSchema(framework) } }, required: ["personas"], additionalProperties: false };
   const result = await claude.complete({ model, effort, system: PERSONA_SYSTEM, messages: [{ role: "user", content: prompt }], maxTokens: 6000, schema });
   return { ...result, personas: (result.json?.personas ?? []).map(personaFromJson) };
-}
-
-// Step 1 of drafting personas from user research: find the distinct user types.
-export async function identifyUserTypes(claude, { model, effort = "low", research, count }) {
-  const prompt = [
-    `Below is user research material (for example interview transcripts, notes or survey comments). Identify ${count ? `the ${count} most distinct` : "the distinct (at most 6)"} types of user it describes, based on their needs, circumstances and attitudes, so that each can become a persona.`,
-    "Only use what the material supports. Give each a short name and a one-sentence summary.",
-    `RESEARCH MATERIAL\n${research}`,
-  ].join("\n\n");
-  const schema = {
-    type: "object",
-    properties: { types: { type: "array", items: { type: "object", properties: { name: { type: "string" }, summary: { type: "string" } }, required: ["name", "summary"], additionalProperties: false } } },
-    required: ["types"],
-    additionalProperties: false,
-  };
-  const result = await claude.complete({ model, effort, system: PERSONA_SYSTEM, messages: [{ role: "user", content: prompt }], maxTokens: 1500, schema });
-  return { ...result, types: (result.json?.types ?? []).slice(0, count || 6) };
-}
-
-const squash = (t) => String(t).toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, " ").trim();
-
-// Step 2: one full persona for one user type, with quotes as evidence. Quotes that do
-// not appear word for word in the material are dropped, so every quote can be trusted.
-export async function draftPersonaFromResearch(claude, { model, effort = "low", research, type, framework }) {
-  const prompt = [
-    `Write a persona for this type of user, based only on the research material below:\n${type.name}: ${type.summary}`,
-    "Fill in what the material supports; where it says nothing, keep the field short or mark importance as \"unclear\". Do not invent facts about real participants.",
-    frameworkBlock(framework),
-    `RESEARCH MATERIAL\n${research}`,
-  ].filter(Boolean).join("\n\n");
-  const result = await claude.complete({ model, effort, system: PERSONA_SYSTEM, messages: [{ role: "user", content: prompt }], maxTokens: 3000, schema: personaItemSchema(framework, { evidence: true }) });
-  if (!result.json) return { ...result, persona: null, droppedQuotes: 0 };
-  const persona = personaFromJson(result.json);
-  const haystack = squash(research);
-  let droppedQuotes = 0;
-  for (const entry of Object.values(persona.rapport)) {
-    if (!entry.evidence) continue;
-    const kept = entry.evidence.filter((q) => {
-      const quote = squash(q).replace(/^["']|["']$/g, "").replace(/^\.\.\.|\.\.\.$/g, "").trim();
-      return quote.length >= 4 && haystack.includes(quote);
-    });
-    droppedQuotes += entry.evidence.length - kept.length;
-    entry.evidence = kept;
-  }
-  return { ...result, persona, droppedQuotes };
 }

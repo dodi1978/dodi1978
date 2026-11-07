@@ -9,7 +9,7 @@ import { claudeCost, voyageCost, MODELS, EFFORTS, modelInfo } from "./pricing.js
 import { DEFAULT_BOT, sanitiseSettings, retrieve, buildSystemPrompt, buildMessages, groundingRules } from "./rag.js";
 import { logUsage, projectUsage } from "./usage.js";
 import { STARTER_PERSONAS, sanitisePersona } from "./personas.js";
-import { planConversation, assignScenarios, mayEndFrom, personaTurn, rateConversation, generateQuestions, generatePersonas, identifyUserTypes, draftPersonaFromResearch } from "./simulate.js";
+import { planConversation, assignScenarios, mayEndFrom, personaTurn, rateConversation, generateQuestions, generatePersonas } from "./simulate.js";
 import { parseImport, personasFromRows, readTableFile } from "./importer.js";
 import { GAAFFE, frameworkOf, sanitiseFramework } from "./framework.js";
 
@@ -99,8 +99,6 @@ function routes() {
     ["GET", "/api/projects/:id/framework", getFramework],
     ["PUT", "/api/projects/:id/framework", saveFramework],
     ["POST", "/api/projects/:id/personas/import", importPersonas],
-    ["POST", "/api/projects/:id/personas/research/types", researchTypes],
-    ["POST", "/api/projects/:id/personas/research/draft", researchDraft],
     ["GET", "/api/projects/:id/runs", listRuns],
     ["POST", "/api/projects/:id/runs", createRun],
     ["DELETE", "/api/runs/:id", deleteRun],
@@ -1006,42 +1004,6 @@ async function importPersonas({ db }, { id }, body) {
   const saved = [];
   for (const p of personas) saved.push(await insertPersona(db, id, { ...p, source }, framework));
   return { count: saved.length };
-}
-
-const MAX_RESEARCH_CHARS = 150_000;
-
-async function researchText(body) {
-  let text;
-  if (body.contentBase64) text = (await extractFromFile(String(body.filename || "research.txt"), Buffer.from(String(body.contentBase64), "base64"))).text;
-  else text = String(body.text ?? "");
-  text = normalise(text);
-  if (text.length < 200) throw new HttpError(400, "There is too little text to draft personas from. Add more research material.");
-  if (text.length > MAX_RESEARCH_CHARS) throw new HttpError(400, `The material is ${Math.round(text.length / 1000)}k characters long; the limit is ${MAX_RESEARCH_CHARS / 1000}k. Split it, or use the most relevant parts.`);
-  return text;
-}
-
-// Step 1: read the research material and find the distinct user types in it.
-async function researchTypes({ db, claude }, { id }, body) {
-  await loadProject(db, id);
-  const text = await researchText(body);
-  const count = body.count ? Math.min(6, Math.max(1, Number(body.count) || 3)) : 0;
-  const result = await identifyUserTypes(claude, { model: body.model || undefined, research: text, count });
-  await logClaude(db, id, result, "draft personas from research");
-  if (!result.types.length) throw new HttpError(422, "No distinct user types could be found in that material.");
-  return { types: result.types, text };
-}
-
-// Step 2: one persona per request, so each stays within the time limit.
-async function researchDraft({ db, claude }, { id }, body) {
-  const framework = await projectFramework(db, id);
-  const text = await researchText(body);
-  const type = { name: requireText(body.type?.name, "User type", 200), summary: String(body.type?.summary ?? "").slice(0, 1000) };
-  const result = await draftPersonaFromResearch(claude, { model: body.model || undefined, research: text, type, framework });
-  await logClaude(db, id, result, "draft personas from research");
-  if (!result.persona) throw new HttpError(502, "The persona could not be drafted. Try again.");
-  const source = `Drafted by AI from ${String(body.sourceLabel || "research material").slice(0, 200)}: check against the data`;
-  const persona = await insertPersona(db, id, { ...result.persona, source }, framework);
-  return { persona, droppedQuotes: result.droppedQuotes };
 }
 
 // ---------- public chat link for real users ----------

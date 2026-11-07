@@ -301,3 +301,5 @@ dialog.wide { width: min(900px, calc(100vw - 32px)); }
 .link-card.off { border-color: var(--warn); }
 .share-link.big { margin: 0.4rem 0 0; }
 .share-link.big input { font-size: 1rem; padding: 0.65rem 0.8rem; }
+
+.section-title { margin: 1.4rem 0 0.8rem; }

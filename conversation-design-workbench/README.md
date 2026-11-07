@@ -21,7 +21,7 @@ A web app for conversation designers and researchers: build a RAG chatbot over y
 
 - **Personas**: write your own (who they are, an optional goal, how they write, language background), add a starter set of eight (two of them adversarial), or generate personas from a short brief with AI. Personas are descriptive, as in conversation design practice.
 - **Rapport framework**: personas are described with a rapport framework, by default Dippold's Taxonomy of Human-Chatbot Rapport (Goals, Autonomy, Attention, Face, Fairness, Ethicality, with their build/break behaviours). The framework can be edited per project (rename, add or remove dimensions, or reset). For each dimension a persona has an importance (low, medium, high) and a note. Simulated users react to the bot in line with these needs, and at the end rate each dimension 1–5 with a comment, in character. Conversations store the framework they were run with.
-- **Personas from user research**: import a spreadsheet (one row per persona; columns matched by name, levels as words or numbers on any scale, with a downloadable template), or let the AI find user types in research text (transcripts, notes, survey comments; text, Word or PDF) and draft a persona for each, with supporting quotes. Quotes that do not appear word for word in the material are removed automatically.
+- **Personas from user research**: import a spreadsheet (one row per persona; columns matched by name, levels as words or numbers on any scale, optional evidence quotes, with a downloadable template).
 - **Simulated conversations**: an AI plays chosen personas in full multi-turn conversations with a chosen bot version, between a minimum and maximum number of user messages, and gives a satisfaction rating (1–5, with a comment) in character at the end. Each run has a **scenario mix**: how many conversations should include the user asking for a human, giving up partway, or misreading a reply (the rest are normal). Scenarios are assigned at random across personas, the moment each happens is chosen at random, and each conversation is recorded with its scenario, so they are known ground truth for checking evals. Runs go one turn per request (each well within Netlify's time limit) with a progress bar, and can be stopped and continued.
 - **Test questions**: generate one-off questions from the documents (a set share of them deliberately not answerable from the documents, and marked as such), edit the list, and run each through the bot.
 - **Written conversations**: write both sides by hand, for example a deliberately ungrounded reply.
@@ -35,7 +35,7 @@ A web app for conversation designers and researchers: build a RAG chatbot over y
 | Overview | Project details, counts, API cost, recent activity |
 | Chatbot design | **RAG** (documents, indexing, try the search) and **System settings** (instructions, model, versions) |
 | Chat | **Real user chat** (the link for participants, its settings, and recent chats with real users) and **Test chat** (chat with the bot yourself) |
-| Personas | Personas, the rapport framework, and adding personas (brief, spreadsheet, research text) |
+| Personas | **New persona** (with the rapport framework, editable from there, and the starter set), **Generate from brief**, **Import a spreadsheet**; the project's personas are listed below |
 | Create interactions | All the tools for creating interactions: simulate conversations, test questions, write a conversation, import transcripts; and the runs |
 | Interactions | Every interaction, simulated or real, labelled by type (real users set apart from those created in the workbench), with counts per type, filters and a page per conversation |
 
@@ -81,7 +81,7 @@ The tests use an in-memory Postgres (PGlite) and stand-ins for Claude and Voyage
 | `src/app.js` | The whole API as one function (web-standard Request → Response) |
 | `src/rag.js` | Retrieval and building what Claude is sent |
 | `src/documents.js` | Text extraction and splitting into passages |
-| `src/personas.js`, `src/simulate.js` | Personas, the simulated user, question and persona generation, drafting personas from research |
+| `src/personas.js`, `src/simulate.js` | Personas, the simulated user, question and persona generation |
 | `src/framework.js` | The rapport framework (GAAFFE default) and persona rapport profiles |
 | `src/importer.js` | Reading CSV, Excel and pasted transcripts, and persona spreadsheets |
 | `src/ai.js`, `src/embeddings.js` | Claude and Voyage AI clients |
