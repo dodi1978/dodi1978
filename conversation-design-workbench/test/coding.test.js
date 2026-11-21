@@ -39,11 +39,11 @@ test("kappa is computed correctly", () => {
   assert.equal(multi.perOption.find((o) => o.value === "a").kappa, 1);
 });
 
-test("the library offers the four code sets, and the rapport set follows the project's framework", async (t) => {
+test("the library offers the five code sets, and the rapport set follows the project's framework", async (t) => {
   const { call, projectId } = await setup(t);
   const lib = await call("GET", `/api/projects/${projectId}/code-library`);
-  assert.deepEqual(lib.data.presets.map((p) => p.id), ["ccsarp_requests", "brown_levinson", "industry_evals", "rapport"]);
-  assert.deepEqual(lib.data.presets.map((p) => p.appliesTo), ["user", "user", "pair", "pair"]);
+  assert.deepEqual(lib.data.presets.map((p) => p.id), ["ccsarp_requests", "brown_levinson", "reply_quality", "conversation_outcomes", "rapport"]);
+  assert.deepEqual(lib.data.presets.map((p) => p.appliesTo), ["user", "user", "pair", "conversation", "pair"]);
   assert.equal(lib.data.presets.find((p) => p.id === "rapport").codeCount, 6, "one effect-on-rapport code per GAAFFE dimension");
 
   const ccsarp = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" });
@@ -111,13 +111,14 @@ test("units are listed per set type, and coding by hand respects conditions", as
   const examples = await call("GET", `/api/code-sets/${set.id}/units?status=examples`);
   assert.equal(examples.data.total, 1);
 
-  const pairs = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "industry_evals" })).data.set;
-  assert.deepEqual(pairs.levels, ["pair", "conversation"]);
+  const pairs = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "reply_quality" })).data.set;
+  assert.deepEqual(pairs.levels, ["pair"]);
   const pairUnits = await call("GET", `/api/code-sets/${pairs.id}/units?kind=written`);
   assert.equal(pairUnits.data.total, 2);
   assert.ok(pairUnits.data.units.every((u) => u.userText), "each bot reply comes with the user message it answers");
-  assert.equal((await call("GET", `/api/code-sets/${pairs.id}/units?level=conversation`)).data.total, 2, "the same set codes whole conversations too");
-  assert.equal((await call("GET", `/api/code-sets/${pairs.id}/units?level=user`)).status, 400);
+  assert.equal((await call("GET", `/api/code-sets/${pairs.id}/units?level=conversation`)).status, 400, "a set has no level without codes");
+  const convs = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "conversation_outcomes" })).data.set;
+  assert.equal((await call("GET", `/api/code-sets/${convs.id}/units`)).data.total, 2);
 });
 
 test("the AI codes a unit using the scheme and the researcher's examples, and agreement is measured", async (t) => {
@@ -178,7 +179,7 @@ test("bot replies are coded with the passages and system instructions; deleting 
   const claude = fakeClaude();
   const { call, projectId, liveId } = await setup(t, { claude });
   await call("POST", `/api/projects/${projectId}/embed`);
-  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "industry_evals" })).data.set;
+  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "reply_quality" })).data.set;
   const unit = (await call("GET", `/api/code-sets/${set.id}/units?conversationId=${liveId}`)).data.units[0];
   await call("POST", `/api/code-sets/${set.id}/units/${unit.unitId}/ai`);
   const prompt = claude.calls.at(-1).messages[0].content;
@@ -298,13 +299,17 @@ test("applied codes are counted per category, with totals for superior categorie
 test("one set can hold codes for bot replies and for whole conversations", async (t) => {
   const claude = fakeClaude();
   const { call, projectId, liveId } = await setup(t, { claude });
-  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "industry_evals" })).data.set;
+  let set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "reply_quality" })).data.set;
+  await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Task success", type: "category", unit: "conversation", options: [{ label: "Resolved" }, { label: "Partly resolved" }, { label: "Not resolved" }] });
+  await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Overall quality", type: "scale", unit: "conversation", scale: { min: 1, max: 5 } });
+  set = (await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Adversarial", type: "yes_no", unit: "conversation" })).data.set;
+  assert.deepEqual(set.levels, ["pair", "conversation"]);
   const reply = (await call("GET", `/api/code-sets/${set.id}/units?conversationId=${liveId}`)).data.units[0];
   await call("POST", `/api/code-sets/${set.id}/units/${reply.unitId}/ai`, {});
   assert.ok(!("task_success" in claude.calls.at(-1).schema.properties), "reply-level coding leaves out conversation codes");
   assert.ok("groundedness" in claude.calls.at(-1).schema.properties);
 
-  const saved = await call("PUT", `/api/code-sets/${set.id}/units/${liveId}`, { level: "conversation", values: { task_success: "resolved", overall_quality: 4, groundedness: "fully_grounded" } });
+  const saved = await call("PUT", `/api/code-sets/${set.id}/units/${liveId}`, { level: "conversation", values: { task_success: "partly_resolved", overall_quality: 4, groundedness: "fully_grounded" } });
   assert.equal(saved.status, 200, JSON.stringify(saved.data));
   assert.deepEqual(Object.keys(saved.data.human).sort(), ["overall_quality", "task_success"], "only the conversation's own codes are kept");
   const ai = await call("POST", `/api/code-sets/${set.id}/units/${liveId}/ai`, { level: "conversation" });
@@ -325,9 +330,40 @@ test("one set can hold codes for bot replies and for whole conversations", async
 
   // A code can only depend on a code on the same unit.
   const bad = await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Why not resolved", type: "comment", condition: { codeKey: "task_success", values: ["not_resolved"] } });
-  assert.equal(bad.status, 400);
+  assert.equal(bad.status, 400, "a reply code cannot depend on a conversation code");
   const good = await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Why not resolved", type: "comment", unit: "conversation", condition: { codeKey: "task_success", values: ["not_resolved"] } });
   assert.equal(good.status, 200, JSON.stringify(good.data));
   const moved = await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Tone", type: "comment", unit: "pair" });
   assert.equal(moved.data.set.codes.at(-1).unit, undefined, "a code on the set's own unit needs no unit of its own");
+});
+
+test("your own code sets can be saved to the library and added to other projects", async (t) => {
+  const { call, projectId } = await setup(t);
+  const set = (await call("POST", `/api/projects/${projectId}/code-sets`, { name: "Repair", appliesTo: "user", description: "Repair moves" })).data.set;
+  assert.equal((await call("POST", `/api/code-sets/${set.id}/promote`)).status, 400, "an empty set cannot be saved");
+  await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Repair type", type: "category", memo: "my note", options: [{ label: "Self-repair" }, { label: "Other-initiated", parent: "Repair" }, { label: "Repair" }] });
+  const saved = await call("POST", `/api/code-sets/${set.id}/promote`);
+  assert.equal(saved.data.updated, false);
+  assert.ok((await call("GET", `/api/code-sets/${set.id}`)).data.set.inLibrary, "the set knows it is in the library");
+
+  const other = (await call("POST", "/api/projects", { name: "Second study" })).data.project;
+  const lib = (await call("GET", `/api/projects/${other.id}/code-library`)).data.presets;
+  const mine = lib.find((p) => p.mine);
+  assert.equal(mine.name, "Repair");
+  assert.equal(mine.fromProject, "Coding study");
+  const added = (await call("POST", `/api/projects/${other.id}/code-library`, { preset: mine.id })).data.set;
+  assert.equal(added.projectId, other.id);
+  assert.deepEqual(added.codes[0].options.find((o) => o.value === "other_initiated").parent, "repair", "the hierarchy comes along");
+
+  // Saving again updates the library copy instead of adding a second one.
+  await call("PATCH", `/api/code-sets/${set.id}`, { name: "Repair (v2)" });
+  assert.equal((await call("POST", `/api/code-sets/${set.id}/promote`)).data.updated, true);
+  const lib2 = (await call("GET", `/api/projects/${other.id}/code-library`)).data.presets.filter((p) => p.mine);
+  assert.deepEqual(lib2.map((p) => p.name), ["Repair (v2)"]);
+
+  // The library copy outlives its project, and can be removed.
+  await call("DELETE", `/api/projects/${projectId}`);
+  assert.equal((await call("GET", `/api/projects/${other.id}/code-library`)).data.presets.filter((p) => p.mine).length, 1);
+  assert.equal((await call("DELETE", `/api/code-library/${mine.libraryId}`)).status, 200);
+  assert.equal((await call("GET", `/api/projects/${other.id}/code-library`)).data.presets.filter((p) => p.mine).length, 0);
 });

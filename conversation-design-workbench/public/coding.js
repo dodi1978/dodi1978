@@ -194,13 +194,31 @@ export async function codingTab(body, projectId, _overview, extra = []) {
 
 // ---------- codebook ----------
 
+// Saves a copy of a set to the library (or updates its copy), for use in any project.
+async function saveToLibrary(set, after) {
+  const again = Boolean(set.inLibrary);
+  const ok = await confirmDialog(again
+    ? `Update the library copy of “${set.name}” with its codes as they are now? Projects that already added it keep their own copy.`
+    : `Save “${set.name}” to the library? Every project can then add a copy of its codes (not the coding). Your notes on codes come along.`, again ? "Update" : "Save to library");
+  if (!ok) return;
+  try {
+    const r = await api("POST", `/api/code-sets/${set.id}/promote`);
+    toast(r.updated ? "Library copy updated." : "Saved to the library. Other projects can now add it.");
+    after();
+  } catch (err) {
+    fail(err);
+  }
+}
+
 async function codebookPage(body, projectId, sets, setId) {
   if (setId) return setEditor(body, projectId, setId);
   const { presets } = await api("GET", `/api/projects/${projectId}/code-library`);
   const reload = () => codingTab(body, projectId, null, ["codebook"]).catch(fail);
 
   const setCards = sets.map((s) => h("div", { class: "card set-card" },
-    h("div", { class: "row" }, h("a", { class: "set-title", href: `#/p/${projectId}/coding/codebook/${s.id}` }, s.name), h("span", { class: "spacer" }), h("span", { class: `badge unit-${s.appliesTo}` }, unitsLabel(s))),
+    h("div", { class: "row" }, h("a", { class: "set-title", href: `#/p/${projectId}/coding/codebook/${s.id}` }, s.name), h("span", { class: "spacer" }),
+      s.inLibrary ? h("span", { class: "badge", title: "A copy is in the library for other projects." }, "in library") : null,
+      h("span", { class: `badge unit-${s.appliesTo}` }, unitsLabel(s))),
     h("p", { class: "small muted" }, `${plural(s.codes.length, "code")} · you have coded ${plural(s.humanUnits, "unit")}${s.examples ? ` (${s.examples} as examples)` : ""} · the AI has coded ${plural(s.aiUnits, "unit")}`),
     h("div", { class: "row" },
       h("a", { class: "button", href: `#/p/${projectId}/coding/codebook/${s.id}` }, "Edit codes"),
@@ -208,6 +226,7 @@ async function codebookPage(body, projectId, sets, setId) {
       h("a", { class: "button", href: `#/p/${projectId}/coding/ai/${s.id}` }, "AI coding"),
       h("a", { class: "button", href: `#/p/${projectId}/coding/agreement/${s.id}` }, "Agreement"),
       h("span", { class: "spacer" }),
+      h("button", { class: "link-button", onclick: () => saveToLibrary(s, reload) }, s.inLibrary ? "Update in library" : "Save to library"),
       h("button", { class: "link-button", onclick: async () => { try { await api("POST", `/api/code-sets/${s.id}/duplicate`); reload(); } catch (err) { fail(err); } } }, "Duplicate"),
       h("button", { class: "link-button danger", onclick: async () => {
         if (!(await confirmDialog(`Delete “${s.name}” with its codes and all coding done with it (yours and the AI's)? This cannot be undone.`))) return;
@@ -219,7 +238,7 @@ async function codebookPage(body, projectId, sets, setId) {
         }
       } }, "Delete"))));
 
-  const libCards = presets.map((p) => {
+  const libCard = (p) => {
     const add = h("button", { class: "primary", onclick: async () => {
       const done = busy(add, "Adding…");
       try {
@@ -233,12 +252,25 @@ async function codebookPage(body, projectId, sets, setId) {
     } }, sets.some((s) => s.name === p.name) ? "Add another copy" : "Add to this project");
     return h("div", { class: "card set-card" },
       h("div", { class: "row" }, h("strong", {}, p.name), h("span", { class: "spacer" }), h("span", { class: `badge unit-${p.appliesTo}` }, unitsLabel(p))),
-      h("p", { class: "small" }, p.description),
-      h("p", { class: "small muted" }, h("em", {}, p.source)),
+      p.description ? h("p", { class: "small" }, p.description) : null,
+      p.source ? h("p", { class: "small muted" }, h("em", {}, p.source)) : null,
+      p.mine ? h("p", { class: "small muted" }, `Saved from “${p.fromProject}”, ${new Date(p.savedAt).toLocaleDateString()}${p.fromSetId && sets.some((s) => s.id === p.fromSetId) ? " (this project)" : ""}`) : null,
       h("details", { class: "small" }, h("summary", {}, `${plural(p.codeCount, "code")}`), h("ul", { class: "lib-codes" }, (p.codes ?? p.codeNames.map((name) => ({ name }))).map((c) => h("li", {}, c.name,
         c.options?.length ? h("details", {}, h("summary", {}, hasHierarchy(c) ? "Show the hierarchy" : "Show the categories"), categoryTree(c)) : null)))),
-      h("div", { class: "row" }, add));
-  });
+      h("div", { class: "row" }, add, h("span", { class: "spacer" }),
+        p.mine ? h("button", { class: "link-button danger", onclick: async () => {
+          if (!(await confirmDialog(`Remove “${p.name}” from the library? Projects that already added it keep their copy, and so does the project it came from.`, "Remove"))) return;
+          try {
+            await api("DELETE", `/api/code-library/${p.libraryId}`);
+            toast("Removed from the library.");
+            reload();
+          } catch (err) {
+            fail(err);
+          }
+        } }, "Remove from library") : null));
+  };
+  const readyMade = presets.filter((p) => !p.mine).map(libCard);
+  const mine = presets.filter((p) => p.mine).map(libCard);
 
   const name = h("input", { id: "ns-name", placeholder: "e.g. Emotion in user messages", maxlength: 200 });
   const applies = h("select", { id: "ns-applies" }, Object.entries(UNIT_SHORT).map(([k, l]) => h("option", { value: k }, l[0].toUpperCase() + l.slice(1))));
@@ -263,8 +295,11 @@ async function codebookPage(body, projectId, sets, setId) {
     h("h2", { class: "section-title", style: "margin-top:0" }, `Code sets in this project (${sets.length})`),
     sets.length ? h("div", { class: "set-list" }, setCards) : h("p", { class: "muted" }, "No code sets yet. Add one from the library below, or create your own."),
     h("h2", { class: "section-title" }, "Library"),
-    h("p", { class: "muted" }, "Ready-made code sets. Adding one copies it into this project, where you can change anything."),
-    h("div", { class: "persona-grid" }, libCards),
+    h("p", { class: "muted" }, "Adding a code set copies it into this project, where you can change anything."),
+    h("h3", {}, `Your code sets (${mine.length})`),
+    mine.length ? h("div", { class: "persona-grid" }, mine) : h("p", { class: "muted small" }, "None yet. Use “Save to library” on one of your code sets to make it available to all your projects."),
+    h("h3", {}, "Ready-made"),
+    h("div", { class: "persona-grid" }, readyMade),
     newForm);
 }
 
@@ -340,7 +375,9 @@ async function setEditor(body, projectId, setId) {
       h("div", { class: "grid-2" },
         h("div", { class: "field" }, h("label", { for: "se-model" }, "AI coder model"), model),
         h("div", { class: "field" }, h("label", { for: "se-effort" }, "AI coder effort"), effort, h("div", { class: "hint" }, "Higher effort may code more carefully, but is slower and costs more."))),
-      saveSet),
+      h("div", { class: "row" }, saveSet, h("span", { class: "spacer" }),
+        set.inLibrary ? h("span", { class: "small muted" }, `In the library (saved ${new Date(set.inLibrary.savedAt).toLocaleDateString()})`) : null,
+        h("button", { type: "button", onclick: () => saveToLibrary(set, reload) }, set.inLibrary ? "Update in library" : "Save to library"))),
     h("div", { class: "card" },
       h("div", { class: "row" }, h("h2", { style: "margin:0" }, `Codes (${set.codes.length})`), h("span", { class: "spacer" }),
         h("button", { class: "primary", onclick: () => { fill(editorHolder, codeEditor(set, null, reload)); editorHolder.scrollIntoView({ behavior: "smooth" }); } }, "+ Add code")),

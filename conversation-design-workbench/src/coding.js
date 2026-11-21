@@ -74,6 +74,11 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
 
   const levelParam = (url, body) => body?.level || url?.searchParams?.get("level") || "";
 
+  async function libraryCopy(db, setId) {
+    const [row] = await db.query("SELECT id, updated_at FROM library_sets WHERE from_set_id = $1", [setId]);
+    return row ? { libraryId: row.id, savedAt: row.updated_at } : null;
+  }
+
   function setOut(s, codes, counts = {}) {
     return {
       id: s.id, projectId: s.project_id, name: s.name, description: s.description, appliesTo: s.applies_to, levels: levelsOf(s, codes),
@@ -97,13 +102,13 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
     await loadProject(db, id);
     const sets = await db.query("SELECT * FROM code_sets WHERE project_id = $1 ORDER BY position, created_at", [id]);
     const out = [];
-    for (const s of sets) out.push(setOut(s, await codesOf(db, s.id), await setCounts(db, s.id)));
+    for (const s of sets) out.push({ ...setOut(s, await codesOf(db, s.id), await setCounts(db, s.id)), inLibrary: await libraryCopy(db, s.id) });
     return { sets: out, unitTypes: UNIT_TYPES, codeTypes: CODE_TYPES };
   }
 
   async function getSet({ db }, { id }) {
     const s = await loadSet(db, id);
-    return { set: setOut(s, await codesOf(db, id), await setCounts(db, id)), unitTypes: UNIT_TYPES, codeTypes: CODE_TYPES };
+    return { set: { ...setOut(s, await codesOf(db, id), await setCounts(db, id)), inLibrary: await libraryCopy(db, id) }, unitTypes: UNIT_TYPES, codeTypes: CODE_TYPES };
   }
 
   async function insertSet(db, projectId, { name, description = "", appliesTo, source = "" }, codes = []) {
@@ -126,17 +131,55 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
     return getSet({ db }, { id: setId });
   }
 
+  // The library: the ready-made sets, then your own sets saved from any project (id "mine:<id>").
+  async function savedSets(db) {
+    const rows = await db.query("SELECT * FROM library_sets ORDER BY created_at DESC");
+    return rows.map((r) => ({
+      id: `mine:${r.id}`, libraryId: r.id, mine: true, name: r.name, appliesTo: r.applies_to, description: r.description, source: r.source,
+      codes: r.codes, fromSetId: r.from_set_id, fromProject: r.from_project_name, savedAt: r.updated_at,
+    }));
+  }
+
   async function listPresets({ db }, { id }) {
     const framework = frameworkOf(await loadProject(db, id));
-    return { presets: presetList(framework).map((p) => ({ id: p.id, name: p.name, appliesTo: p.appliesTo, description: p.description, source: p.source, codeCount: p.codes.length, codeNames: p.codes.map((c) => c.name), codes: presetCodes(p).map((c) => ({ name: c.name, options: c.options ?? null, unit: c.unit ?? null })) })) };
+    const card = (p) => ({
+      id: p.id, mine: Boolean(p.mine), libraryId: p.libraryId, fromProject: p.fromProject, fromSetId: p.fromSetId, savedAt: p.savedAt,
+      name: p.name, appliesTo: p.appliesTo, description: p.description, source: p.source, codeCount: p.codes.length,
+      codeNames: p.codes.map((c) => c.name), codes: presetCodes(p).map((c) => ({ name: c.name, options: c.options ?? null, unit: c.unit ?? null })),
+    });
+    return { presets: [...presetList(framework), ...(await savedSets(db))].map(card) };
   }
 
   async function addPreset({ db }, { id }, body) {
     const framework = frameworkOf(await loadProject(db, id));
-    const preset = presetList(framework).find((p) => p.id === body.preset);
+    const preset = [...presetList(framework), ...(await savedSets(db))].find((p) => p.id === body.preset);
     if (!preset) throw new HttpError(400, "Unknown code set in the library.");
     const setId = await insertSet(db, id, preset, presetCodes(preset));
     return getSet({ db }, { id: setId });
+  }
+
+  // Saves a copy of one of your sets to the library, so every project can add it. Saving
+  // the same set again updates its library copy. Coding is not copied, only the codes.
+  async function promoteSet({ db }, { id }) {
+    const s = await loadSet(db, id);
+    const project = await loadProject(db, s.project_id);
+    const codes = (await codesOf(db, id)).map(({ id: _i, version: _v, ...c }) => c);
+    if (!codes.length) throw new HttpError(400, "Add codes to this set before saving it to the library.");
+    const [existing] = await db.query("SELECT id FROM library_sets WHERE from_set_id = $1", [id]);
+    const values = [s.name, s.description, s.applies_to, s.data?.source ?? "", JSON.stringify(codes), project.name];
+    if (existing) {
+      await db.query("UPDATE library_sets SET name = $2, description = $3, applies_to = $4, source = $5, codes = $6, from_project_name = $7, updated_at = now() WHERE id = $1", [existing.id, ...values]);
+      return { libraryId: existing.id, updated: true };
+    }
+    const libraryId = randomUUID();
+    await db.query("INSERT INTO library_sets (id, name, description, applies_to, source, codes, from_project_name, from_set_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", [libraryId, ...values, id]);
+    return { libraryId, updated: false };
+  }
+
+  async function removeFromLibrary({ db }, { id }) {
+    const rows = await db.query("DELETE FROM library_sets WHERE id = $1 RETURNING id", [id]);
+    if (!rows.length) throw new HttpError(404, "That code set is not in the library.");
+    return { ok: true };
   }
 
   async function updateSet({ db }, { id }, body) {
@@ -734,6 +777,8 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
     ["POST", "/api/projects/:id/code-sets", createSet],
     ["GET", "/api/projects/:id/code-library", listPresets],
     ["POST", "/api/projects/:id/code-library", addPreset],
+    ["DELETE", "/api/code-library/:id", removeFromLibrary],
+    ["POST", "/api/code-sets/:id/promote", promoteSet],
     ["GET", "/api/code-sets/:id", getSet],
     ["PATCH", "/api/code-sets/:id", updateSet],
     ["DELETE", "/api/code-sets/:id", deleteSet],
