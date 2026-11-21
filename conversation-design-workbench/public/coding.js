@@ -207,7 +207,8 @@ async function codebookPage(body, projectId, sets, setId) {
       h("div", { class: "row" }, h("strong", {}, p.name), h("span", { class: "spacer" }), h("span", { class: `badge unit-${p.appliesTo}` }, UNIT_SHORT[p.appliesTo])),
       h("p", { class: "small" }, p.description),
       h("p", { class: "small muted" }, h("em", {}, p.source)),
-      h("details", { class: "small" }, h("summary", {}, `${plural(p.codeCount, "code")}`), h("ul", {}, p.codeNames.map((n) => h("li", {}, n)))),
+      h("details", { class: "small" }, h("summary", {}, `${plural(p.codeCount, "code")}`), h("ul", { class: "lib-codes" }, (p.codes ?? p.codeNames.map((name) => ({ name }))).map((c) => h("li", {}, c.name,
+        c.options?.length ? h("details", {}, h("summary", {}, hasHierarchy(c) ? "Show the hierarchy" : "Show the categories"), categoryTree(c)) : null)))),
       h("div", { class: "row" }, add));
   });
 
@@ -242,9 +243,11 @@ async function codebookPage(body, projectId, sets, setId) {
 function codeSummary(code, codes) {
   const parts = [state.codeTypes?.[code.type] ?? code.type];
   if (code.options) {
-    const top = code.options.filter((o) => !o.parent).length;
+    const superiors = code.options.filter((o) => code.options.some((x) => x.parent === o.value)).length;
+    const subs = code.options.filter((o) => o.parent).length;
+    const others = code.options.length - superiors - subs;
     parts.push(hasHierarchy(code)
-      ? `${code.options.length - top} categories under ${top} superior categories`
+      ? `${subs} categories under ${superiors} superior ${superiors === 1 ? "category" : "categories"}${others ? ` + ${others} other ${others === 1 ? "category" : "categories"}` : ""}`
       : `${code.options.length} ${code.options.length === 1 ? "category" : "categories"}`);
   }
   if (code.scale) parts.push(`${code.scale.min}–${code.scale.max}`);
@@ -272,7 +275,7 @@ async function setEditor(body, projectId, setId) {
       h("div", { class: "small muted" }, codeSummary(code, set.codes)),
       code.definition ? h("div", { class: "small" }, code.definition) : null,
       code.memo ? h("div", { class: "small memo" }, h("strong", {}, "Your notes: "), code.memo) : null,
-      hasHierarchy(code) ? h("details", { class: "small" }, h("summary", {}, "Show the hierarchy"), categoryTree(code)) : null),
+      code.options?.length ? h("details", { class: "small" }, h("summary", {}, hasHierarchy(code) ? "Show the hierarchy" : "Show the categories"), categoryTree(code)) : null),
     h("div", { class: "code-actions" },
       h("button", { class: "link-button", disabled: i === 0, "aria-label": `Move ${code.name} up`, onclick: async () => { try { await api("POST", `/api/codes/${code.id}/move`, { direction: "up" }); reload(); } catch (err) { fail(err); } } }, "↑"),
       h("button", { class: "link-button", disabled: i === set.codes.length - 1, "aria-label": `Move ${code.name} down`, onclick: async () => { try { await api("POST", `/api/codes/${code.id}/move`, { direction: "down" }); reload(); } catch (err) { fail(err); } } }, "↓"),
