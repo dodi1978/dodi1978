@@ -845,6 +845,11 @@ async function agreementPage(body, projectId, sets, set) {
 async function appliedPage(body, projectId, sets, set) {
   const params = query();
   const kind = params.get("kind") || "";
+  const usedOnly = params.get("used") === "1";
+  const keep = (changes) => {
+    const next = { kind, used: usedOnly ? "1" : "", ...changes };
+    return new URLSearchParams(Object.entries(next).filter(([, v]) => v));
+  };
   const data = await api("GET", `/api/code-sets/${set.id}/frequencies${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`);
   const codesByKey = Object.fromEntries(set.codes.map((c) => [c.key, c]));
 
@@ -859,7 +864,9 @@ async function appliedPage(body, projectId, sets, set) {
     if (!r.categories) return h("div", { class: "card applied-card" }, head, h("p", { class: "small muted" }, code?.type === "comment" ? "Comments are not counted by category." : "Numbers are not counted by category."));
     const max = Math.max(1, ...r.categories.flatMap((c) => [c.human, c.ai]));
     const depth = (c) => (c.parent ? 1 + depth(r.categories.find((x) => x.value === c.parent) ?? {}) : 0);
-    const rows = r.categories.map((c) => {
+    const shown = usedOnly ? r.categories.filter((c) => c.human || c.ai) : r.categories;
+    if (!shown.length) return h("div", { class: "card applied-card" }, head, h("p", { class: "small muted" }, "No category of this code has been applied yet."));
+    const rows = shown.map((c) => {
       const path = code?.options ? formatValue({ ...code, type: "category" }, c.value) : c.label;
       const tip = `${path}: you ${plural(c.human, "unit")}, AI ${plural(c.ai, "unit")}${c.superior ? " (including its subordinate categories)" : ""}`;
       return h("div", { class: `viz-row level-${depth(c)} ${c.superior ? "superior" : ""}`, title: tip, tabindex: "0", "aria-label": tip },
@@ -874,12 +881,14 @@ async function appliedPage(body, projectId, sets, set) {
   fill(body, subtabs(projectId, "applied", set.id),
     h("div", { class: "card" },
       h("div", { class: "grid-2" },
-        setPicker(sets, set.id, (id) => go(projectId, "applied", id, new URLSearchParams(kind ? [["kind", kind]] : []))),
+        setPicker(sets, set.id, (id) => go(projectId, "applied", id, keep({}))),
         h("div", { class: "field" }, h("label", { for: "ap-kind" }, "Interactions"),
-          h("select", { id: "ap-kind", onchange: (e) => go(projectId, "applied", set.id, new URLSearchParams(e.target.value ? [["kind", e.target.value]] : [])) },
+          h("select", { id: "ap-kind", onchange: (e) => go(projectId, "applied", set.id, keep({ kind: e.target.value })) },
             TYPE_FILTER.map(([v, l]) => h("option", { value: v, selected: kind === v }, l))))),
       h("p", {}, h("strong", {}, plural(data.unitsInScope, "unit")), ` (${UNIT_SHORT[set.appliesTo]}) · you have coded ${data.coded.human} · the AI has coded ${data.coded.ai}`),
       h("p", { class: "small muted" }, "Each code is shown with its hierarchy: superior categories in bold, subordinate categories indented under them. Bars show how many units each category was applied to. A superior category's total includes the units coded with any of its subordinate categories. Hover or focus a row for details."),
-      legend),
+      h("div", { class: "row" }, legend, h("span", { class: "spacer" }),
+        h("label", { class: "check small used-only" }, h("input", { type: "checkbox", id: "ap-used", checked: usedOnly,
+          onchange: (e) => go(projectId, "applied", set.id, keep({ used: e.target.checked ? "1" : "" })) }), " Only show categories that were used"))),
     data.coded.human || data.coded.ai ? cards : h("div", { class: "card empty" }, "Nothing has been coded with this set yet."));
 }

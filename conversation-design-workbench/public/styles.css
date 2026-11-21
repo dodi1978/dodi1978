@@ -429,3 +429,5 @@ tr.detail-row td { padding: 0; border-bottom: none; }
 .applied-codes .code-name { color: var(--muted); }
 .applied-codes .who { font-size: 0.75rem; padding: 0 0.35rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
 .code-note-text { color: var(--muted); font-style: italic; }
+.used-only { flex: 0 1 auto; width: auto; }
+.used-only input { width: auto; margin: 0; }
