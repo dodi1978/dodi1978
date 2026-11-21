@@ -33,6 +33,14 @@ export function fakeEmbedder({ available = true, fail = false } = {}) {
 export function defaultJson(req) {
   const props = req.schema.properties;
   const prompt = req.messages.at(-1).content;
+  // AI coding: every property is { value, explanation[, applies] }. Answer with the first allowed value.
+  if (Object.values(props).length && Object.values(props).every((p) => p.properties?.value && p.properties?.explanation)) {
+    return Object.fromEntries(Object.entries(props).map(([key, p]) => {
+      const v = p.properties.value;
+      const value = v.type === "boolean" ? true : v.type === "array" ? [v.items.enum[0]] : v.enum ? v.enum[Math.floor((v.enum.length - 1) / 2)] : v.type === "number" ? 3 : "A comment.";
+      return [key, { value, explanation: `Because of ${key}.`, ...(p.properties.applies ? { applies: true } : {}) }];
+    }));
+  }
   if (props.action) {
     const turn = Number(/message number (\d+)/.exec(prompt)?.[1] ?? 1);
     const mayEnd = /you may end/.test(prompt);

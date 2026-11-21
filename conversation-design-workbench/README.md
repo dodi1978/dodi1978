@@ -2,7 +2,7 @@
 
 A web app for conversation designers and researchers: build a RAG chatbot over your own documents, create user interactions with it, and test standard and self-written evals on them, qualitatively and quantitatively.
 
-**Status: Stage 2 of 6** – projects, chatbot builder and test chat (stage 1); personas and creating interactions (stage 2). The full feature list and build order are in the shared feature-list document.
+**Status: Stage 3 of 6** – projects, chatbot builder and test chat (stage 1); personas and creating interactions (stage 2); the codebook, coding by hand and by AI, and agreement (stage 3). The full feature list and build order are in the shared feature-list document.
 
 - To put it online: see [DEPLOY.md](DEPLOY.md) (Netlify, step by step).
 - Hosting: Netlify (static pages + one serverless function) with Postgres. The same code runs as a plain Node server (`npm start`), for example on Render.
@@ -38,6 +38,20 @@ A web app for conversation designers and researchers: build a RAG chatbot over y
 | Personas | **Generate manually** (the persona form, with the rapport framework, editable from there), **Add starter set**, **Generate from brief**, **Import a spreadsheet**, **Created personas** (the project's personas) |
 | Create interactions | All the tools for creating interactions: simulate conversations, test questions, write a conversation, import transcripts; and the runs |
 | Interactions | Every interaction, simulated or real, labelled by type (real users set apart from those created in the workbench), with counts per type, filters and a page per conversation |
+| Coding | **Codebook** (code sets and their codes; library), **Code by hand**, **AI coding**, **Agreement** |
+
+## Coding (Stage 3)
+
+- **Code sets** apply to one kind of unit: user messages, bot replies, bot replies with the user message they answer (pairs), or whole conversations. Each code has a definition and a result type (yes/no, one category, several categories, scale, number, comment), optional categories with definitions, optional instructions for the AI, and an optional condition (it applies only when another code has certain values). Changing what a code means makes a new version; agreement compares only coding done with the same version.
+- **Library** (copied into a project, then editable): CCSARP requests (Blum-Kulka, House & Kasper 1989: request yes/no; head act strategy, the nine strategies under the three levels of directness; perspective; alerters; internal modification, with syntactic downgraders, lexical/phrasal downgraders and upgraders as superior categories; supportive moves, mitigating and aggravating; some categories adapted for written chat); Brown & Levinson (1987) politeness (superstrategy; and the strategies, with the 15 positive, 10 negative and 15 off-record strategies under their superstrategies); bot reply quality (groundedness, answer relevance, retrieval relevance, completeness, instruction following, text quality, multi-turn quality, safety); conversation outcomes (resolution, overall quality, adversarial attempt and outcome); and rapport, built from the project's framework (per dimension: builds / neutral / breaks, and which behaviours).
+- **Superior and subordinate categories**: any category can sit under a superior category (up to three levels). Coders choose the most specific category, or the superior one if none of its subordinate categories fits; conditions on a superior category are met by its subordinate ones; and agreement is also reported at the level of superior categories (e.g. directness level as well as head act strategy).
+- **Building hierarchies yourself**: in the code editor each category is a row in an outline. → puts a category under the one above it, ← moves it back up a level, ↑ ↓ reorder, and “+ sub” adds a subordinate category. Each project keeps its own hierarchies; library sets are only a starting point.
+- **Notes**: each code has “Your notes on this code” (a memo for you; not shown to the AI and not a new version of the code). While coding by hand, “+ Note” adds a note to the code you just chose for that message; your notes appear next to the AI's reasons under Agreement.
+- **Applied codes**: a chart per code of how many units each category was applied to, by you and by the AI, with the hierarchy shown (superior categories in bold with totals that include their subordinate categories). Tick “Only show categories that were used” to hide categories nobody has applied yet; a superior category stays visible when any of its subordinate categories was used. Each conversation's page also lists the codes applied to each message, and to the whole conversation, with the hierarchy path, who applied them (you, AI, or “you & AI” when you agree) and any notes or AI reasons.
+- **Choosing which codes to use**: in Code by hand and AI coding you can work on some of a set's codes only (the choice carries over between the two); codes that a chosen code depends on are included automatically, and your (or the AI's) other codes on the same units are kept.
+- **Code by hand**: each unit is shown in its conversation; conditional codes appear only when they apply. Any coded unit can be marked as an example for the AI. The AI's codes can be shown alongside (hidden by default).
+- **AI coding**: one request per unit (within the time limit), three at a time, with a cost estimate first, progress and stop. The AI sees the code definitions, up to 8 of your most recent examples, the unit and the conversation before it, and for bot replies the passages and system instructions the bot had. It does not see the interaction type, title, persona, scenario or ratings. It gives a short reason per code.
+- **Agreement**: per code, the number of units coded by both, percentage agreement and Cohen's kappa (quadratic weighted kappa for scales; category by category for multi-choice codes), with Landis & Koch labels. Disagreements are listed with the AI's reason, and you can look again, accept the AI's code, or keep yours and make it an example.
 
 ## Real users (public chat link)
 
@@ -72,7 +86,11 @@ Then open http://localhost:3000. Without `DATABASE_URL`, data is stored in a loc
 npm test
 ```
 
-The tests use an in-memory Postgres (PGlite) and stand-ins for Claude and Voyage AI, so they cost nothing. Set `TEST_DATABASE_URL` to also run them against a real Postgres (with pgvector, if installed).
+The tests use an in-memory Postgres (PGlite) and stand-ins for Claude and Voyage AI, so they cost nothing. To also run them against a real Postgres (with pgvector, if installed), set `TEST_DATABASE_URL` and run the files one at a time, since they share that database:
+
+```bash
+TEST_DATABASE_URL=postgres://… node --test --test-concurrency=1 test/*.test.js
+```
 
 ## Code layout
 
@@ -83,9 +101,10 @@ The tests use an in-memory Postgres (PGlite) and stand-ins for Claude and Voyage
 | `src/documents.js` | Text extraction and splitting into passages |
 | `src/personas.js`, `src/simulate.js` | Personas, the simulated user, question and persona generation |
 | `src/framework.js` | The rapport framework (GAAFFE default) and persona rapport profiles |
+| `src/codebooks.js`, `src/coding.js`, `src/agreement.js` | The code library, coding (units, by hand, by AI) and agreement statistics |
 | `src/importer.js` | Reading CSV, Excel and pasted transcripts, and persona spreadsheets |
 | `src/ai.js`, `src/embeddings.js` | Claude and Voyage AI clients |
 | `src/db.js` | Database connection and tables |
 | `netlify/functions/api.mjs` | Netlify wrapper around `src/app.js` |
 | `server.js` | Plain Node wrapper (local, Render) |
-| `public/` | The pages (plain HTML, CSS and JavaScript; no build step): `app.js` (stage 1 pages), `interactions.js` (personas and interactions), `ui.js` (shared parts), `markdown.js` |
+| `public/` | The pages (plain HTML, CSS and JavaScript; no build step): `app.js` (stage 1 pages), `interactions.js` (personas and interactions), `coding.js` (coding), `ui.js` (shared parts), `markdown.js` |

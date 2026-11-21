@@ -1,5 +1,6 @@
 // Stage 2 pages: personas, and creating and browsing interactions.
 
+import { formatValue } from "./coding.js";
 import { state, h, api, toast, fail, when, plural, fill, busy, confirmDialog, showDialog, messageView } from "./ui.js";
 
 const SOURCE_LABELS = { simulated: "simulated", "hand-written": "hand-written", imported: "imported", real: "real user" };
@@ -892,8 +893,39 @@ export async function interactionsTab(body, projectId, _overview, extra = []) {
   fill(body, listCard);
 }
 
+// The codes applied to one unit (a message, or the whole conversation), with their hierarchy and who applied them.
+function appliedCodes({ sets, annotations }) {
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  return (unitId, heading) => {
+    const mine = annotations.filter((a) => a.unitId === unitId && a.value !== null && a.value !== undefined);
+    if (!mine.length) return null;
+    const groups = sets.map((set) => {
+      const rows = set.codes.map((code) => {
+        const human = mine.find((a) => a.setId === set.id && a.codeId === code.id && a.coder === "human");
+        const ai = mine.find((a) => a.setId === set.id && a.codeId === code.id && a.coder === "ai");
+        if (!human && !ai) return null;
+        const line = (a, who) => h("li", {},
+          h("span", { class: "code-name" }, code.name), ": ", h("strong", {}, formatValue(code, a.value)),
+          " ", h("span", { class: `who ${who === "AI" ? "w-ai" : "w-you"}` }, who),
+          a.note ? h("div", { class: "code-note-text" }, a.note) : null);
+        if (human && ai && same(human.value, ai.value)) return line(human, "you & AI");
+        return [human && line(human, "you"), ai && line(ai, "AI")].filter(Boolean);
+      }).filter(Boolean).flat();
+      return rows.length ? h("div", { class: "applied-set" }, h("div", { class: "applied-set-name" }, set.name), h("ul", {}, rows)) : null;
+    }).filter(Boolean);
+    if (!groups.length) return null;
+    return heading
+      ? h("details", { class: "applied-codes", open: true }, h("summary", {}, heading), groups)
+      : h("details", { class: "applied-codes" }, h("summary", {}, `Codes (${mine.length})`), groups);
+  };
+}
+
 async function conversationDetail(body, projectId, conversationId) {
-  const { conversation: c, settings, messages } = await api("GET", `/api/conversations/${conversationId}`);
+  const [{ conversation: c, settings, messages }, coded] = await Promise.all([
+    api("GET", `/api/conversations/${conversationId}`),
+    api("GET", `/api/conversations/${conversationId}/codes`).catch(() => ({ sets: [], annotations: [] })),
+  ]);
+  const codesFor = appliedCodes(coded);
   const meta = c.meta ?? {};
   const facts = [];
   const fact = (label, value) => value !== undefined && value !== null && value !== "" && facts.push(h("div", { class: "fact" }, h("div", { class: "label" }, label), h("div", {}, value)));
@@ -934,6 +966,8 @@ async function conversationDetail(body, projectId, conversationId) {
     if (m.meta?.misunderstanding) flags.push(h("span", { class: "badge warn" }, "planned misreading"));
     if (m.meta?.askedForHuman) flags.push(h("span", { class: "badge warn" }, "asks for a human"));
     if (flags.length) view.append(h("div", { class: "details flags" }, flags));
+    const applied = codesFor(m.id);
+    if (applied) view.append(applied);
     return view;
   });
 
@@ -952,6 +986,7 @@ async function conversationDetail(body, projectId, conversationId) {
           }
         } }, "Delete")),
       h("div", { class: "facts" }, facts),
+      codesFor(c.id, "Codes for the whole conversation"),
       perception,
       meta.persona ? h("details", {}, h("summary", {}, "Persona as used in this conversation"),
         h("div", { class: "rules" }, [meta.persona.description, meta.persona.communicationStyle && `Writes: ${meta.persona.communicationStyle}`, meta.persona.languageBackground && `Language: ${meta.persona.languageBackground}`, legacyBehaviourLine(meta.persona.behaviour),
