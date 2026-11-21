@@ -12,6 +12,7 @@ import { STARTER_PERSONAS, sanitisePersona } from "./personas.js";
 import { planConversation, assignScenarios, mayEndFrom, personaTurn, rateConversation, generateQuestions, generatePersonas } from "./simulate.js";
 import { parseImport, personasFromRows, readTableFile } from "./importer.js";
 import { GAAFFE, frameworkOf, sanitiseFramework } from "./framework.js";
+import { codingRoutes } from "./coding.js";
 
 const COOKIE = "cdw_session";
 const EMBED_BATCH = 48;
@@ -107,7 +108,7 @@ function routes() {
     ["POST", "/api/projects/:id/questions/generate", generateQuestionsRoute],
     ["POST", "/api/projects/:id/conversations/written", createWrittenConversation],
     ["POST", "/api/projects/:id/import", importConversations],
-  ].map(([method, pattern, handler]) => {
+  ].concat(codingRoutes({ HttpError, loadProject, requireText, logClaude })).map(([method, pattern, handler]) => {
     const names = [];
     const regex = new RegExp(`^${pattern.replace(/:(\w+)/g, (_, n) => (names.push(n), "([^/]+)"))}$`);
     return { method, regex, names, handler };
@@ -288,6 +289,19 @@ async function duplicateProject({ db }, { id }) {
   const personas = await db.query("SELECT * FROM personas WHERE project_id = $1 ORDER BY created_at", [id]);
   for (const p of personas) {
     await db.query("INSERT INTO personas (id, project_id, data, created_at) VALUES ($1, $2, $3, $4)", [randomUUID(), newId, JSON.stringify(p.data), p.created_at]);
+  }
+  // Code sets and their codes come along too (not the coding itself).
+  const sets = await db.query("SELECT * FROM code_sets WHERE project_id = $1 ORDER BY position", [id]);
+  for (const set of sets) {
+    const setId = randomUUID();
+    await db.query(
+      "INSERT INTO code_sets (id, project_id, name, description, applies_to, position, data, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [setId, newId, set.name, set.description, set.applies_to, set.position, JSON.stringify(set.data), set.created_at],
+    );
+    const codes = await db.query("SELECT * FROM codes WHERE set_id = $1 ORDER BY position", [set.id]);
+    for (const c of codes) {
+      await db.query("INSERT INTO codes (id, set_id, project_id, position, version, data) VALUES ($1, $2, $3, $4, $5, $6)", [randomUUID(), setId, newId, c.position, c.version, JSON.stringify(c.data)]);
+    }
   }
   return { project: projectSummary(await loadProject(db, newId)) };
 }

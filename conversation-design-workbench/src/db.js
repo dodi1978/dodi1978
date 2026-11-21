@@ -141,6 +141,49 @@ const SCHEMA = [
   // Public chat link for real users (NULL until set up).
   `ALTER TABLE projects ADD COLUMN IF NOT EXISTS share JSONB`,
   `CREATE INDEX IF NOT EXISTS projects_share_token_idx ON projects ((share->>'token'))`,
+  // Stage 3: code sets (codebooks), their codes, and annotations by you or the AI.
+  `CREATE TABLE IF NOT EXISTS code_sets (
+     id TEXT PRIMARY KEY,
+     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+     name TEXT NOT NULL,
+     description TEXT NOT NULL DEFAULT '',
+     applies_to TEXT NOT NULL,
+     position INTEGER NOT NULL DEFAULT 0,
+     data JSONB NOT NULL DEFAULT '{}'::jsonb,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS code_sets_project_idx ON code_sets(project_id)`,
+  `CREATE TABLE IF NOT EXISTS codes (
+     id TEXT PRIMARY KEY,
+     set_id TEXT NOT NULL REFERENCES code_sets(id) ON DELETE CASCADE,
+     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+     position INTEGER NOT NULL DEFAULT 0,
+     version INTEGER NOT NULL DEFAULT 1,
+     data JSONB NOT NULL,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS codes_set_idx ON codes(set_id)`,
+  `CREATE TABLE IF NOT EXISTS annotations (
+     id TEXT PRIMARY KEY,
+     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+     set_id TEXT NOT NULL REFERENCES code_sets(id) ON DELETE CASCADE,
+     code_id TEXT NOT NULL REFERENCES codes(id) ON DELETE CASCADE,
+     unit_type TEXT NOT NULL,
+     unit_id TEXT NOT NULL,
+     conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+     coder TEXT NOT NULL,
+     value JSONB NOT NULL,
+     explanation TEXT NOT NULL DEFAULT '',
+     is_example BOOLEAN NOT NULL DEFAULT false,
+     code_version INTEGER NOT NULL DEFAULT 1,
+     model TEXT,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS annotations_set_unit_idx ON annotations(set_id, unit_id)`,
+  `CREATE INDEX IF NOT EXISTS annotations_conversation_idx ON annotations(conversation_id)`,
 ];
 
 // Creates the tables if they are missing. Safe to run on every cold start.

@@ -305,3 +305,61 @@ dialog.wide { width: min(900px, calc(100vw - 32px)); }
 .section-title { margin: 1.4rem 0 0.8rem; }
 
 .persona-card.is-added { opacity: 0.7; }
+
+/* Coding: codebook, coding by hand, AI coding, agreement */
+.set-list { display: flex; flex-direction: column; gap: 0; }
+.set-card { margin-bottom: 0.8rem; }
+.set-card p { margin: 0.4rem 0; }
+.set-title { font-weight: 650; font-size: 1.05rem; text-decoration: none; color: var(--text); }
+.set-title:hover { color: var(--accent); }
+.badge.unit-user { background: var(--warn-soft); color: var(--warn); }
+.badge.unit-bot, .badge.unit-pair { background: var(--accent-soft); color: var(--accent); }
+.badge.unit-conversation { background: var(--ok-soft); color: var(--ok); }
+.code-list { display: flex; flex-direction: column; }
+.code-row { display: flex; gap: 1rem; align-items: flex-start; padding: 0.7rem 0; border-bottom: 1px solid var(--border); }
+.code-row:last-child { border-bottom: none; }
+.code-main { flex: 1; min-width: 0; }
+.code-main .small { margin-top: 0.15rem; }
+.code-actions { display: flex; gap: 0.3rem; align-items: center; flex-shrink: 0; }
+.code-editor { border-color: var(--accent); }
+.option-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.5rem; }
+.option-row { display: grid; grid-template-columns: minmax(140px, 1fr) 2fr auto; gap: 0.5rem; align-items: center; }
+.set-picker select { max-width: 100%; }
+.coding-layout { display: grid; grid-template-columns: 300px 1fr; gap: 1rem; align-items: start; }
+.unit-list { padding: 0.6rem; max-height: 80vh; overflow-y: auto; }
+.unit-item { display: block; padding: 0.5rem 0.6rem; border-radius: 8px; text-decoration: none; color: var(--text); border-bottom: 1px solid var(--border); }
+.unit-item:hover { background: var(--surface-2); }
+.unit-item.active { background: var(--accent-soft); }
+.unit-item .meta { display: flex; gap: 0.3rem; margin-top: 0.25rem; flex-wrap: wrap; }
+.unit-text { font-size: 0.9rem; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; }
+.code-pane { min-width: 0; }
+.chat-log.context { max-height: 45vh; margin: 0.6rem 0 1rem; border-radius: 8px; }
+.chat-log.context .context-msg { opacity: 0.55; }
+.chat-log.context .target .bubble { box-shadow: 0 0 0 3px var(--accent); }
+.code-form { display: flex; flex-direction: column; gap: 0.8rem; }
+.code-field { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; margin: 0; }
+.code-field legend, .code-field > label { font-weight: 600; padding: 0 0.3rem; }
+.code-field .hint { margin: 0 0 0.4rem; }
+.choice-list { display: flex; flex-direction: column; gap: 0.25rem; }
+.choice { display: flex; gap: 0.5rem; align-items: flex-start; font-weight: 400; margin: 0; padding: 0.2rem 0.3rem; border-radius: 6px; cursor: pointer; }
+.choice:hover { background: var(--surface-2); }
+.choice input { width: auto; margin-top: 0.25rem; }
+.choice-def { display: block; font-size: 0.8rem; color: var(--muted); }
+.scale-row { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.scale-point { display: inline-flex; flex-direction: column; align-items: center; font-weight: 400; margin: 0; }
+.scale-point input { width: auto; }
+.ai-note { margin-top: 0.4rem; font-size: 0.85rem; padding: 0.4rem 0.6rem; border-radius: 6px; background: var(--warn-soft); }
+.ai-note.same { background: var(--ok-soft); }
+.code-save { margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+table.agreement td { vertical-align: middle; }
+tr.detail-row td { padding: 0; border-bottom: none; }
+.disagreements { padding: 0.6rem 0 1rem; }
+.disagreement { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; margin-bottom: 0.6rem; background: var(--surface); }
+.disagreement .unit-text { -webkit-line-clamp: 6; margin-bottom: 0.5rem; }
+.fact-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); font-weight: 600; }
+@media (max-width: 800px) {
+  .coding-layout { grid-template-columns: 1fr; }
+  .unit-list { max-height: 40vh; }
+  .option-row { grid-template-columns: 1fr; }
+  .code-row { flex-direction: column; gap: 0.4rem; }
+}
