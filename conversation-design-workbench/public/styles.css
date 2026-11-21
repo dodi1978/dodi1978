@@ -431,3 +431,6 @@ tr.detail-row td { padding: 0; border-bottom: none; }
 .code-note-text { color: var(--muted); font-style: italic; }
 .used-only { flex: 0 1 auto; width: auto; }
 .used-only input { width: auto; margin: 0; }
+.level-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: -0.4rem 0 1rem; }
+.level-switch a { padding: 0.3rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); text-decoration: none; color: var(--text); font-size: 0.9rem; }
+.level-switch a.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }

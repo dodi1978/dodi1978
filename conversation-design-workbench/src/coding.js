@@ -58,9 +58,25 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
     return rows.map((r) => ({ id: r.id, version: r.version, ...r.data }));
   }
 
+  // The units a set's codes are coded on: the set's own unit first, then any other.
+  function levelsOf(set, codes) {
+    return [...new Set([set.applies_to, ...codes.map((c) => c.unit ?? set.applies_to)])];
+  }
+
+  // One level of a set: the set as if it applied to that unit, with only that unit's codes.
+  async function loadLevel(db, id, level) {
+    const set = await loadSet(db, id);
+    const all = await codesOf(db, id);
+    const lv = level || set.applies_to;
+    if (!levelsOf(set, all).includes(lv)) throw new HttpError(400, "This code set has no codes for that unit.");
+    return { set: { ...set, applies_to: lv }, codes: all.filter((c) => (c.unit ?? set.applies_to) === lv) };
+  }
+
+  const levelParam = (url, body) => body?.level || url?.searchParams?.get("level") || "";
+
   function setOut(s, codes, counts = {}) {
     return {
-      id: s.id, projectId: s.project_id, name: s.name, description: s.description, appliesTo: s.applies_to,
+      id: s.id, projectId: s.project_id, name: s.name, description: s.description, appliesTo: s.applies_to, levels: levelsOf(s, codes),
       source: s.data?.source ?? "", ai: { model: s.data?.ai?.model ?? DEFAULT_MODEL, effort: s.data?.ai?.effort ?? "low" },
       codes, createdAt: s.created_at, updatedAt: s.updated_at, ...counts,
     };
@@ -112,7 +128,7 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
 
   async function listPresets({ db }, { id }) {
     const framework = frameworkOf(await loadProject(db, id));
-    return { presets: presetList(framework).map((p) => ({ id: p.id, name: p.name, appliesTo: p.appliesTo, description: p.description, source: p.source, codeCount: p.codes.length, codeNames: p.codes.map((c) => c.name), codes: presetCodes(p).map((c) => ({ name: c.name, options: c.options ?? null })) })) };
+    return { presets: presetList(framework).map((p) => ({ id: p.id, name: p.name, appliesTo: p.appliesTo, description: p.description, source: p.source, codeCount: p.codes.length, codeNames: p.codes.map((c) => c.name), codes: presetCodes(p).map((c) => ({ name: c.name, options: c.options ?? null, unit: c.unit ?? null })) })) };
   }
 
   async function addPreset({ db }, { id }, body) {
@@ -155,21 +171,23 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
     const s = await loadSet(db, id);
     const existing = await codesOf(db, id);
     const code = sanitiseCode(body, { keys: new Set(existing.map((c) => c.key)) });
+    if (code.unit === s.applies_to) delete code.unit;
     if (!code.name) throw new HttpError(400, "Give the code a name.");
-    checkCode(code, existing);
+    checkCode(code, existing, s);
     const [{ pos }] = await db.query("SELECT COALESCE(max(position), 0) + 1 AS pos FROM codes WHERE set_id = $1", [id]);
     await db.query("INSERT INTO codes (id, set_id, project_id, position, version, data) VALUES ($1, $2, $3, $4, 1, $5)", [randomUUID(), id, s.project_id, pos, JSON.stringify(code)]);
     await db.query("UPDATE code_sets SET updated_at = now() WHERE id = $1", [id]);
     return getSet({ db }, { id });
   }
 
-  function checkCode(code, others) {
+  function checkCode(code, others, set) {
     if ((code.type === "category" || code.type === "multi") && code.options.length < (code.type === "category" ? 2 : 1)) {
       throw new HttpError(400, code.type === "category" ? "A category code needs at least two categories." : "Add at least one category.");
     }
     if (code.condition) {
       const parent = others.find((c) => c.key === code.condition.codeKey && c.key !== code.key);
       if (!parent || !["category", "multi", "yes_no"].includes(parent.type)) throw new HttpError(400, "A code can only depend on a yes/no or category code in the same set.");
+      if ((parent.unit ?? set.applies_to) !== (code.unit ?? set.applies_to)) throw new HttpError(400, "A code can only depend on a code that is coded on the same unit.");
     }
   }
 
@@ -183,8 +201,13 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
     const row = await loadCode(db, id);
     const others = (await codesOf(db, row.set_id)).filter((c) => c.id !== id);
     const code = sanitiseCode({ ...row.data, ...body, key: row.data.key }, { keys: new Set() });
+    const set = await loadSet(db, row.set_id);
+    if (code.unit === set.applies_to) delete code.unit;
     if (!code.name) throw new HttpError(400, "Give the code a name.");
-    checkCode(code, others);
+    checkCode(code, others, set);
+    if (others.some((c) => c.condition?.codeKey === code.key && (c.unit ?? set.applies_to) !== (code.unit ?? set.applies_to))) {
+      throw new HttpError(400, "Other codes depend on this one, so it must stay on the same unit as them.");
+    }
     // Compared with keys sorted: the database may store an object's keys in another order.
     const changed = MEANING_FIELDS.some((f) => stable(code[f] ?? null) !== stable(row.data[f] ?? null));
     await db.query("UPDATE codes SET data = $2, version = version + $3, updated_at = now() WHERE id = $1", [id, JSON.stringify(code), changed ? 1 : 0]);
@@ -286,10 +309,10 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
   }
 
   async function listUnits({ db }, { id }, _body, url) {
-    const set = await loadSet(db, id);
     const q = url?.searchParams ?? new URLSearchParams();
+    const { set, codes } = await loadLevel(db, id, q.get("level"));
     const keys = parseKeys(q.get("codes"));
-    const codeIds = keys ? scopeCodes(await codesOf(db, id), keys).map((c) => c.id) : null;
+    const codeIds = (keys ? scopeCodes(codes, keys) : codes).map((c) => c.id);
     const { sql, select, params } = unitQuery(set, q, codeIds);
     const limit = Math.min(200, Math.max(1, Number(q.get("limit")) || 50));
     const offset = Math.max(0, Number(q.get("offset")) || 0);
@@ -341,10 +364,9 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
   }
 
   // body.codeKeys: the codes coded in this session; your other codes on the unit are kept.
-  async function saveHuman({ db }, { id, unitId }, body) {
-    const set = await loadSet(db, id);
+  async function saveHuman({ db }, { id, unitId }, body, url) {
+    const { set, codes } = await loadLevel(db, id, levelParam(url, body));
     const unit = await loadUnit(db, set, unitId);
-    const codes = await codesOf(db, id);
     const scope = new Set(scopeCodes(codes, parseKeys(body.codeKeys)).map((c) => c.key));
     const existing = groupAnnotations(await annotationsFor(db, id, [unitId]))[unitId];
     const raw = body.values && typeof body.values === "object" ? body.values : {};
@@ -386,7 +408,7 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
       for (const k of Object.keys(values)) delete values[k];
       for (const [k, v] of Object.entries(grouped.ai)) values[k] = v.value;
     }
-    return saveHuman(ctx, { id, unitId }, { values, notes, ...(body.codeKey ? { codeKeys: [body.codeKey] } : {}) });
+    return saveHuman(ctx, { id, unitId }, { values, notes, level: body.level, ...(body.codeKey ? { codeKeys: [body.codeKey] } : {}) });
   }
 
   // ---------- AI coding ----------
@@ -474,9 +496,9 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
   async function examplesFor(db, set, codes, excludeUnitId) {
     const rows = await db.query(
       `SELECT DISTINCT unit_id, max(updated_at) AS at FROM annotations
-        WHERE set_id = $1 AND coder = 'human' AND is_example AND unit_id <> $2
+        WHERE set_id = $1 AND coder = 'human' AND is_example AND unit_id <> $2 AND unit_type = $3
         GROUP BY unit_id ORDER BY at DESC LIMIT ${MAX_EXAMPLES}`,
-      [set.id, excludeUnitId],
+      [set.id, excludeUnitId, set.applies_to],
     );
     const out = [];
     for (const r of rows) {
@@ -511,10 +533,9 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
   }
 
   // body.codeKeys: code only these (plus what their conditions need); the AI's other codes are kept.
-  async function aiCodeUnit(ctx, { id, unitId }, body = {}) {
+  async function aiCodeUnit(ctx, { id, unitId }, body = {}, url) {
     const { db, claude } = ctx;
-    const set = await loadSet(db, id);
-    const allCodes = await codesOf(db, id);
+    const { set, codes: allCodes } = await loadLevel(db, id, levelParam(url, body));
     if (!allCodes.length) throw new HttpError(400, "Add codes to this set first.");
     const codes = scopeCodes(allCodes, parseKeys(body.codeKeys));
     const unit = await loadUnit(db, set, unitId);
@@ -542,9 +563,9 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
   }
 
   // A rough cost estimate before an AI coding run, from the prompt for one unit.
-  async function estimate({ db }, { id }, body) {
-    const set = await loadSet(db, id);
-    const codes = scopeCodes(await codesOf(db, id), parseKeys(body.codeKeys));
+  async function estimate({ db }, { id }, body, url) {
+    const { set, codes: levelCodes } = await loadLevel(db, id, levelParam(url, body));
+    const codes = scopeCodes(levelCodes, parseKeys(body.codeKeys));
     const count = Math.max(0, Math.min(10000, Number(body.count) || 0));
     if (!codes.length || !count) return { count, costUsd: 0 };
     const sample = body.unitId;
@@ -564,10 +585,9 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
 
   // ---------- agreement ----------
 
-  async function agreement({ db }, { id }) {
-    const set = await loadSet(db, id);
-    const codes = await codesOf(db, id);
-    const rows = await db.query("SELECT a.*, c.data->>'key' AS code_key FROM annotations a JOIN codes c ON c.id = a.code_id WHERE a.set_id = $1", [id]);
+  async function agreement({ db }, { id }, _body, url) {
+    const { set, codes } = await loadLevel(db, id, levelParam(url));
+    const rows = await db.query("SELECT a.*, c.data->>'key' AS code_key FROM annotations a JOIN codes c ON c.id = a.code_id WHERE a.set_id = $1 AND a.unit_type = $2", [id, set.applies_to]);
     const grouped = groupAnnotations(rows);
     const both = Object.entries(grouped).filter(([, g]) => Object.keys(g.human).length && Object.keys(g.ai).length);
     const units = both.map(([unitId]) => unitId);
@@ -629,8 +649,7 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
   // How often each code and category was applied, by you and by the AI. A superior
   // category's total counts the units coded with it or any of its subordinate categories.
   async function frequencies({ db }, { id }, _body, url) {
-    const set = await loadSet(db, id);
-    const codes = await codesOf(db, id);
+    const { set, codes } = await loadLevel(db, id, levelParam(url));
     const q = url?.searchParams ?? new URLSearchParams();
     const { sql, params } = unitQuery(set, new URLSearchParams(q.get("kind") ? [["kind", q.get("kind")]] : []));
     const unitIds = (await db.query(`SELECT ${set.applies_to === "conversation" ? "c.id" : "m.id"} AS unit_id ${sql}`, params)).map((r) => r.unit_id);

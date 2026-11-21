@@ -39,11 +39,11 @@ test("kappa is computed correctly", () => {
   assert.equal(multi.perOption.find((o) => o.value === "a").kappa, 1);
 });
 
-test("the library offers the five code sets, and the rapport set follows the project's framework", async (t) => {
+test("the library offers the four code sets, and the rapport set follows the project's framework", async (t) => {
   const { call, projectId } = await setup(t);
   const lib = await call("GET", `/api/projects/${projectId}/code-library`);
-  assert.deepEqual(lib.data.presets.map((p) => p.id), ["ccsarp_requests", "brown_levinson", "reply_quality", "conversation_outcomes", "rapport"]);
-  assert.deepEqual(lib.data.presets.map((p) => p.appliesTo), ["user", "user", "pair", "conversation", "pair"]);
+  assert.deepEqual(lib.data.presets.map((p) => p.id), ["ccsarp_requests", "brown_levinson", "industry_evals", "rapport"]);
+  assert.deepEqual(lib.data.presets.map((p) => p.appliesTo), ["user", "user", "pair", "pair"]);
   assert.equal(lib.data.presets.find((p) => p.id === "rapport").codeCount, 6, "one effect-on-rapport code per GAAFFE dimension");
 
   const ccsarp = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" });
@@ -57,10 +57,8 @@ test("the library offers the five code sets, and the rapport set follows the pro
   assert.ok(codes.slice(1).every((c) => c.condition?.codeKey === "request_type" && c.condition.values.join() === "request_for_information,request_for_action"), "request codes apply only to requests");
 
   const bl = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "brown_levinson" });
-  assert.deepEqual(bl.data.set.codes.map((c) => c.key), ["strategies"], "no separate superstrategy code");
-  const strat = bl.data.set.codes[0];
-  assert.deepEqual(strat.options.filter((o) => !o.parent).map((o) => o.value), ["positive_politeness", "negative_politeness", "off_record", "bald_on_record", "no_fta"]);
-  assert.equal(strat.options.length, 45, "15 positive, 10 negative and 15 off-record strategies under their superior categories");
+  assert.deepEqual(bl.data.set.codes.map((c) => c.key), ["positive_politeness", "negative_politeness", "off_record", "bald_on_record", "no_fta"], "the five superstrategies come first");
+  assert.deepEqual(bl.data.set.codes.map((c) => c.options?.length ?? c.type), [15, 10, 15, "yes_no", "yes_no"]);
 
   await call("PUT", `/api/projects/${projectId}/framework`, { framework: { name: "Mine", dimensions: [{ name: "Warmth", definition: "d", builds: ["Friendly"], breaks: ["Cold"] }] } });
   const rapport = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "rapport" });
@@ -113,12 +111,13 @@ test("units are listed per set type, and coding by hand respects conditions", as
   const examples = await call("GET", `/api/code-sets/${set.id}/units?status=examples`);
   assert.equal(examples.data.total, 1);
 
-  const pairs = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "reply_quality" })).data.set;
+  const pairs = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "industry_evals" })).data.set;
+  assert.deepEqual(pairs.levels, ["pair", "conversation"]);
   const pairUnits = await call("GET", `/api/code-sets/${pairs.id}/units?kind=written`);
   assert.equal(pairUnits.data.total, 2);
   assert.ok(pairUnits.data.units.every((u) => u.userText), "each bot reply comes with the user message it answers");
-  const convs = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "conversation_outcomes" })).data.set;
-  assert.equal((await call("GET", `/api/code-sets/${convs.id}/units`)).data.total, 2);
+  assert.equal((await call("GET", `/api/code-sets/${pairs.id}/units?level=conversation`)).data.total, 2, "the same set codes whole conversations too");
+  assert.equal((await call("GET", `/api/code-sets/${pairs.id}/units?level=user`)).status, 400);
 });
 
 test("the AI codes a unit using the scheme and the researcher's examples, and agreement is measured", async (t) => {
@@ -179,7 +178,7 @@ test("bot replies are coded with the passages and system instructions; deleting 
   const claude = fakeClaude();
   const { call, projectId, liveId } = await setup(t, { claude });
   await call("POST", `/api/projects/${projectId}/embed`);
-  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "reply_quality" })).data.set;
+  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "industry_evals" })).data.set;
   const unit = (await call("GET", `/api/code-sets/${set.id}/units?conversationId=${liveId}`)).data.units[0];
   await call("POST", `/api/code-sets/${set.id}/units/${unit.unitId}/ai`);
   const prompt = claude.calls.at(-1).messages[0].content;
@@ -294,4 +293,41 @@ test("applied codes are counted per category, with totals for superior categorie
   const conv = await call("GET", `/api/conversations/${writtenId}/codes`);
   assert.equal(conv.data.sets[0].name, "CCSARP: requests");
   assert.ok(conv.data.annotations.some((a) => a.unitId === polite.unitId && a.coder === "human" && a.value === "7_query_preparatory"));
+});
+
+test("one set can hold codes for bot replies and for whole conversations", async (t) => {
+  const claude = fakeClaude();
+  const { call, projectId, liveId } = await setup(t, { claude });
+  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "industry_evals" })).data.set;
+  const reply = (await call("GET", `/api/code-sets/${set.id}/units?conversationId=${liveId}`)).data.units[0];
+  await call("POST", `/api/code-sets/${set.id}/units/${reply.unitId}/ai`, {});
+  assert.ok(!("task_success" in claude.calls.at(-1).schema.properties), "reply-level coding leaves out conversation codes");
+  assert.ok("groundedness" in claude.calls.at(-1).schema.properties);
+
+  const saved = await call("PUT", `/api/code-sets/${set.id}/units/${liveId}`, { level: "conversation", values: { task_success: "resolved", overall_quality: 4, groundedness: "fully_grounded" } });
+  assert.equal(saved.status, 200, JSON.stringify(saved.data));
+  assert.deepEqual(Object.keys(saved.data.human).sort(), ["overall_quality", "task_success"], "only the conversation's own codes are kept");
+  const ai = await call("POST", `/api/code-sets/${set.id}/units/${liveId}/ai`, { level: "conversation" });
+  assert.equal(ai.status, 200, JSON.stringify(ai.data));
+  assert.match(claude.calls.at(-1).messages[0].content, /^CONVERSATION\n/);
+  assert.deepEqual(Object.keys(claude.calls.at(-1).schema.properties).sort(), ["adversarial", "overall_quality", "task_success"]);
+  const coded = await call("GET", `/api/code-sets/${set.id}/units?level=conversation&status=coded_by_both`);
+  assert.equal(coded.data.total, 1);
+  assert.equal((await call("GET", `/api/code-sets/${set.id}/units?status=coded_by_me`)).data.total, 0, "reply units are counted on their own");
+
+  const agr = await call("GET", `/api/code-sets/${set.id}/agreement?level=conversation`);
+  assert.deepEqual(agr.data.codes.map((c) => c.key), ["task_success", "overall_quality", "adversarial"]);
+  assert.equal(agr.data.unitsCodedByBoth, 1);
+  const replyAgr = await call("GET", `/api/code-sets/${set.id}/agreement`);
+  assert.equal(replyAgr.data.unitsCodedByBoth, 0);
+  const freq = await call("GET", `/api/code-sets/${set.id}/frequencies?level=conversation`);
+  assert.equal(freq.data.coded.human, 1);
+
+  // A code can only depend on a code on the same unit.
+  const bad = await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Why not resolved", type: "comment", condition: { codeKey: "task_success", values: ["not_resolved"] } });
+  assert.equal(bad.status, 400);
+  const good = await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Why not resolved", type: "comment", unit: "conversation", condition: { codeKey: "task_success", values: ["not_resolved"] } });
+  assert.equal(good.status, 200, JSON.stringify(good.data));
+  const moved = await call("POST", `/api/code-sets/${set.id}/codes`, { name: "Tone", type: "comment", unit: "pair" });
+  assert.equal(moved.data.set.codes.at(-1).unit, undefined, "a code on the set's own unit needs no unit of its own");
 });
