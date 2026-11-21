@@ -392,7 +392,7 @@ const PERSONA_PARTS = [
 export async function personasTab(body, projectId, _overview, extra = []) {
   const part = PERSONA_PARTS.find(([k]) => k === extra[0])?.[0];
   if (!part) {
-    location.replace(`#/p/${projectId}/personas/new`);
+    location.replace(`#/p/${projectId}/create/personas/new`);
     return;
   }
   const [{ personas }, fw] = await Promise.all([
@@ -404,10 +404,10 @@ export async function personasTab(body, projectId, _overview, extra = []) {
   // After adding personas, show them in the list.
   const showCreated = () => {
     if (part === "created") reload();
-    else location.hash = `#/p/${projectId}/personas/created`;
+    else location.hash = `#/p/${projectId}/create/personas/created`;
   };
   const subtabs = h("nav", { class: "subtabs", "aria-label": "Ways to add personas" },
-    PERSONA_PARTS.map(([k, label]) => h("a", { href: `#/p/${projectId}/personas/${k}`, class: k === part ? "active" : "", "aria-current": k === part ? "page" : null }, label)));
+    PERSONA_PARTS.map(([k, label]) => h("a", { href: `#/p/${projectId}/create/personas/${k}`, class: k === part ? "active" : "", "aria-current": k === part ? "page" : null }, label)));
 
   let panel;
   if (part === "new") {
@@ -522,7 +522,7 @@ function versionSelect(versions, id) {
 
 function simulatePanel(ctx) {
   const { projectId, versions, personas, refresh, area } = ctx;
-  if (!personas.length) return h("div", {}, h("p", {}, "You need personas first."), h("a", { class: "button", href: `#/p/${projectId}/personas` }, "Go to Personas"));
+  if (!personas.length) return h("div", {}, h("p", {}, "You need personas first."), h("a", { class: "button", href: `#/p/${projectId}/create/personas` }, "Go to Personas"));
   const version = versionSelect(versions, "sim-version");
   const boxes = personas.map((p) => h("input", { type: "checkbox", value: p.id, id: `sim-p-${p.id}`, style: "width:auto", checked: !p.adversarial }));
   const count = h("input", { id: "sim-count", type: "number", min: 1, max: 100, value: Math.min(20, Math.max(4, boxes.filter((b) => b.checked).length)) });
@@ -773,7 +773,9 @@ function importPanel(ctx) {
 // The "Simulated interactions" tab: the four ways of creating interactions, and their runs.
 // The four ways of creating interactions, as sub-tabs (each with its own address), and
 // which runs belong under each.
+// Personas come first: simulated conversations need them.
 const MAKERS = [
+  ["personas", "Personas", null, null],
   ["simulate", "Simulate conversations", simulatePanel, "simulated"],
   ["questions", "Test questions", questionsPanel, "questions"],
   ["write", "Write a conversation", writePanel, null],
@@ -787,6 +789,13 @@ export async function createTab(body, projectId, _overview, extra = []) {
     return;
   }
   const [key, name, panel, runKind] = maker;
+  const makerTabs = h("nav", { class: "subtabs", "aria-label": "Ways to create interactions" },
+    MAKERS.map(([k, label]) => h("a", { href: `#/p/${projectId}/create/${k}`, class: k === key ? "active" : "", "aria-current": k === key ? "page" : null }, label)));
+  if (key === "personas") {
+    const inner = h("div", { class: "nested-tabs" });
+    fill(body, makerTabs, inner);
+    return personasTab(inner, projectId, _overview, extra.slice(1));
+  }
   const [{ runs: allRuns }, { personas }, { versions }] = await Promise.all([
     api("GET", `/api/projects/${projectId}/runs`),
     api("GET", `/api/projects/${projectId}/personas`),
@@ -795,8 +804,7 @@ export async function createTab(body, projectId, _overview, extra = []) {
   const refresh = () => createTab(body, projectId, _overview, extra).catch(fail);
   const area = h("div");
   const ctx = { projectId, versions, personas, refresh, area };
-  const subtabs = h("nav", { class: "subtabs", "aria-label": "Ways to create interactions" },
-    MAKERS.map(([k, label]) => h("a", { href: `#/p/${projectId}/create/${k}`, class: k === key ? "active" : "", "aria-current": k === key ? "page" : null }, label)));
+  const subtabs = makerTabs;
   const createCard = h("div", { class: "card" }, h("h2", {}, name), panel(ctx));
 
   // Runs of this kind (simulations, test questions or imports).

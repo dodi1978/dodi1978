@@ -35,8 +35,7 @@ A web app for conversation designers and researchers: build a RAG chatbot over y
 | Overview | Project details, counts, API cost, recent activity |
 | Chatbot design | **RAG** (documents, indexing, try the search) and **System settings** (instructions, model, versions) |
 | Chat | **Real user chat** (the link for participants, its settings, and recent chats with real users) and **Test chat** (chat with the bot yourself) |
-| Personas | **Generate manually** (the persona form, with the rapport framework, editable from there), **Add starter set**, **Generate from brief**, **Import a spreadsheet**, **Created personas** (the project's personas) |
-| Create interactions | All the tools for creating interactions: simulate conversations, test questions, write a conversation, import transcripts; and the runs |
+| Create interactions | **Personas** (with its own sections: **Generate manually** – the persona form, with the rapport framework, editable from there; **Add starter set**; **Generate from brief**; **Import a spreadsheet**; **Created personas**), then the tools for creating interactions: **Simulate conversations**, **Test questions**, **Write a conversation**, **Import transcripts**; and the runs |
 | Interactions | Every interaction, simulated or real, labelled by type (real users set apart from those created in the workbench), with counts per type, filters and a page per conversation |
 | Coding | **Codebook** (code sets and their codes; library), **Code by hand**, **AI coding**, **Agreement** |
 

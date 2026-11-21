@@ -434,3 +434,7 @@ tr.detail-row td { padding: 0; border-bottom: none; }
 .level-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: -0.4rem 0 1rem; }
 .level-switch a { padding: 0.3rem 0.75rem; border-radius: 6px; border: 1px solid var(--border); text-decoration: none; color: var(--text); font-size: 0.9rem; }
 .level-switch a.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+/* A second row of sections inside a section (e.g. Personas under Create interactions) */
+.nested-tabs > .subtabs { margin: -0.4rem 0 1rem 0.9rem; padding-left: 0.8rem; border-left: 2px solid var(--accent-soft); gap: 0.2rem; }
+.nested-tabs > .subtabs a { border: none; background: transparent; padding: 0.3rem 0.7rem; font-size: 0.9rem; border-radius: 6px; }
+.nested-tabs > .subtabs a.active { background: var(--accent-soft); }
