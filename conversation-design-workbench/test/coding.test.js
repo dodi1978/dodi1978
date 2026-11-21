@@ -246,3 +246,49 @@ test("agreement is also measured at the level of superior categories", async (t)
   assert.equal(head.superior.percentAgreement, 1, "directness level: both agree");
   assert.deepEqual(head.superior.categories, ["Direct", "Conventionally indirect", "Non-conventionally indirect"]);
 });
+
+test("notes: memos on codes stay private, and notes made while coding are kept", async (t) => {
+  const claude = fakeClaude();
+  const { call, projectId } = await setup(t, { claude });
+  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" })).data.set;
+  const head = set.codes.find((c) => c.key === "head_act");
+  const s = (await call("PATCH", `/api/codes/${head.id}`, { memo: "Check hints against Weizman's coding." })).data.set;
+  const edited = s.codes.find((c) => c.key === "head_act");
+  assert.equal(edited.memo, "Check hints against Weizman's coding.");
+  assert.equal(edited.version, 1, "a memo does not change what the code means");
+
+  const unit = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units.find((u) => /possibly/.test(u.text));
+  await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values: { speech_act: "request", head_act: "7_query_preparatory" }, notes: { head_act: "Could also be a hedged want statement." } });
+  const later = await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { codeKeys: ["perspective"], values: { speech_act: "request", perspective: "hearer_oriented" } });
+  assert.equal(later.data.human.head_act.explanation, "Could also be a hedged want statement.", "notes survive coding other codes");
+
+  await call("POST", `/api/code-sets/${set.id}/units/${unit.unitId}/ai`);
+  assert.doesNotMatch(claude.calls.at(-1).system, /Weizman/, "memos are not shown to the AI");
+});
+
+test("applied codes are counted per category, with totals for superior categories", async (t) => {
+  const { call, projectId, writtenId } = await setup(t, { claude: fakeClaude() });
+  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" })).data.set;
+  const units = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units;
+  const polite = units.find((u) => /possibly/.test(u.text));
+  const blunt = units.find((u) => /now/.test(u.text));
+  await call("PUT", `/api/code-sets/${set.id}/units/${polite.unitId}`, { values: { speech_act: "request", head_act: "7_query_preparatory" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${blunt.unitId}`, { values: { speech_act: "request", head_act: "conventionally_indirect" } });
+  await call("POST", `/api/code-sets/${set.id}/units/${blunt.unitId}/ai`);
+  const f = await call("GET", `/api/code-sets/${set.id}/frequencies`);
+  assert.equal(f.status, 200, JSON.stringify(f.data));
+  assert.deepEqual(f.data.coded, { human: 2, ai: 1 });
+  const head = f.data.codes.find((c) => c.key === "head_act");
+  const cat = (v) => head.categories.find((c) => c.value === v);
+  assert.equal(cat("conventionally_indirect").human, 2, "the superior category counts its own and its subordinates' units");
+  assert.equal(cat("conventionally_indirect").superior, true);
+  assert.equal(cat("7_query_preparatory").human, 1);
+  assert.equal(cat("5_want_statement").ai, 1);
+  assert.equal(cat("direct").ai, 1);
+  const onlyWritten = await call("GET", `/api/code-sets/${set.id}/frequencies?kind=written`);
+  assert.equal(onlyWritten.data.coded.human, 1, "filters by interaction type");
+
+  const conv = await call("GET", `/api/conversations/${writtenId}/codes`);
+  assert.equal(conv.data.sets[0].name, "CCSARP: requests");
+  assert.ok(conv.data.annotations.some((a) => a.unitId === polite.unitId && a.coder === "human" && a.value === "7_query_preparatory"));
+});

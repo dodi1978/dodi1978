@@ -33,6 +33,13 @@ export function scopeCodes(codes, keys) {
   return scoped.length ? scoped : codes;
 }
 
+// JSON with object keys in sorted order, so equal values compare equal.
+function stable(v) {
+  if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`;
+  return JSON.stringify(v);
+}
+
 function meets(code, values, codes) {
   return conditionMet(code, values, code.condition ? codes.find((c) => c.key === code.condition.codeKey) : undefined);
 }
@@ -178,7 +185,8 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
     const code = sanitiseCode({ ...row.data, ...body, key: row.data.key }, { keys: new Set() });
     if (!code.name) throw new HttpError(400, "Give the code a name.");
     checkCode(code, others);
-    const changed = MEANING_FIELDS.some((f) => JSON.stringify(code[f] ?? null) !== JSON.stringify(row.data[f] ?? null));
+    // Compared with keys sorted: the database may store an object's keys in another order.
+    const changed = MEANING_FIELDS.some((f) => stable(code[f] ?? null) !== stable(row.data[f] ?? null));
     await db.query("UPDATE codes SET data = $2, version = version + $3, updated_at = now() WHERE id = $1", [id, JSON.stringify(code), changed ? 1 : 0]);
     return getSet({ db }, { id: row.set_id });
   }
@@ -595,7 +603,7 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
         } else if (hv === undefined || av === undefined) continue;
         pairs.push([hv, av]);
         if (JSON.stringify(hv) !== JSON.stringify(av) && disagreements.length < 100) {
-          disagreements.push({ unitId, conversationId: texts[unitId]?.conversation_id, text: texts[unitId]?.text ?? "", human: hv === NA ? null : hv, ai: av === NA ? null : av, explanation: a?.explanation ?? "" });
+          disagreements.push({ unitId, conversationId: texts[unitId]?.conversation_id, text: texts[unitId]?.text ?? "", human: hv === NA ? null : hv, ai: av === NA ? null : av, explanation: a?.explanation ?? "", humanNote: h?.explanation ?? "" });
         }
       }
       const r = agreementFor(code, pairs);
@@ -616,7 +624,93 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
     return { unitsCodedByBoth: both.length, codes: results };
   }
 
+  // ---------- which codes were applied ----------
+
+  // How often each code and category was applied, by you and by the AI. A superior
+  // category's total counts the units coded with it or any of its subordinate categories.
+  async function frequencies({ db }, { id }, _body, url) {
+    const set = await loadSet(db, id);
+    const codes = await codesOf(db, id);
+    const q = url?.searchParams ?? new URLSearchParams();
+    const { sql, params } = unitQuery(set, new URLSearchParams(q.get("kind") ? [["kind", q.get("kind")]] : []));
+    const unitIds = (await db.query(`SELECT ${set.applies_to === "conversation" ? "c.id" : "m.id"} AS unit_id ${sql}`, params)).map((r) => r.unit_id);
+    const rows = unitIds.length ? await annotationsFor(db, id, unitIds) : [];
+    const grouped = groupAnnotations(rows);
+    const coded = { human: 0, ai: 0 };
+    for (const g of Object.values(grouped)) {
+      if (Object.keys(g.human).length) coded.human++;
+      if (Object.keys(g.ai).length) coded.ai++;
+    }
+    const out = codes.map((code) => {
+      const counts = { human: {}, ai: {} };
+      const applied = { human: 0, ai: 0 };
+      for (const g of Object.values(grouped)) {
+        for (const coder of ["human", "ai"]) {
+          const a = g[coder][code.key];
+          if (!a) continue;
+          applied[coder]++;
+          const values = code.type === "multi" ? a.value : [a.value];
+          const hit = new Set();
+          for (const v of values) {
+            const key = String(v);
+            hit.add(key);
+            if (code.options) for (const anc of ancestorsOf(code.options, key)) hit.add(anc);
+          }
+          for (const k of hit) counts[coder][k] = (counts[coder][k] ?? 0) + 1;
+        }
+      }
+      let categories;
+      if (code.type === "category" || code.type === "multi") {
+        categories = code.options.map((o) => ({
+          value: o.value, label: o.label, parent: o.parent ?? null,
+          superior: code.options.some((x) => x.parent === o.value),
+          human: counts.human[o.value] ?? 0, ai: counts.ai[o.value] ?? 0,
+        }));
+      } else if (code.type === "yes_no") {
+        categories = [["true", "Yes"], ["false", "No"]].map(([v, label]) => ({ value: v, label, parent: null, superior: false, human: counts.human[v] ?? 0, ai: counts.ai[v] ?? 0 }));
+      } else if (code.type === "scale") {
+        categories = Array.from({ length: code.scale.max - code.scale.min + 1 }, (_, i) => String(code.scale.min + i))
+          .map((v) => ({ value: v, label: v, parent: null, superior: false, human: counts.human[v] ?? 0, ai: counts.ai[v] ?? 0 }));
+      }
+      return { key: code.key, name: code.name, type: code.type, applied, ...(categories ? { categories } : {}) };
+    });
+    return { unitsInScope: unitIds.length, coded, codes: out };
+  }
+
+  function ancestorsOf(options, value) {
+    const out = [];
+    let o = options.find((x) => x.value === value);
+    while (o?.parent && out.length < 10) {
+      out.push(o.parent);
+      o = options.find((x) => x.value === o.parent);
+    }
+    return out;
+  }
+
+  // The codes applied to the messages (and the whole) of one conversation, from every set.
+  async function conversationCodes({ db }, { id }) {
+    const [conv] = await db.query("SELECT project_id FROM conversations WHERE id = $1", [id]);
+    if (!conv) throw new HttpError(404, "That conversation does not exist.");
+    const rows = await db.query(
+      `SELECT a.unit_id, a.unit_type, a.coder, a.value, a.explanation, a.set_id, c.id AS code_id
+         FROM annotations a JOIN codes c ON c.id = a.code_id WHERE a.conversation_id = $1`,
+      [id],
+    );
+    const setIds = [...new Set(rows.map((r) => r.set_id))];
+    const sets = [];
+    for (const sid of setIds) {
+      const s = await loadSet(db, sid);
+      sets.push({ id: s.id, name: s.name, appliesTo: s.applies_to, codes: await codesOf(db, sid) });
+    }
+    return {
+      sets,
+      annotations: rows.map((r) => ({ unitId: r.unit_id, unitType: r.unit_type, coder: r.coder, value: r.value, note: r.explanation, setId: r.set_id, codeId: r.code_id })),
+    };
+  }
+
   return [
+    ["GET", "/api/code-sets/:id/frequencies", frequencies],
+    ["GET", "/api/conversations/:id/codes", conversationCodes],
     ["GET", "/api/projects/:id/code-sets", listSets],
     ["POST", "/api/projects/:id/code-sets", createSet],
     ["GET", "/api/projects/:id/code-library", listPresets],

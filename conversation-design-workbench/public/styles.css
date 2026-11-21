@@ -323,7 +323,53 @@ dialog.wide { width: min(900px, calc(100vw - 32px)); }
 .code-actions { display: flex; gap: 0.3rem; align-items: center; flex-shrink: 0; }
 .code-editor { border-color: var(--accent); }
 .option-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.5rem; }
-.option-row { display: grid; grid-template-columns: minmax(140px, 1fr) 2fr minmax(150px, 1fr) auto; gap: 0.5rem; align-items: center; }
+.option-row { display: grid; grid-template-columns: minmax(140px, 1fr) 2fr auto; gap: 0.5rem; align-items: center; }
+.tree-actions { display: flex; gap: 0.1rem; align-items: center; flex-wrap: nowrap; }
+.tree-btn { padding: 0.2rem 0.35rem; font-size: 0.95rem; }
+.option-list.tree .option-row { transition: margin-left 0.15s; }
+.memo { margin-top: 0.25rem; color: var(--muted); }
+.cat-tree { margin: 0.3rem 0 0; padding-left: 1.1rem; }
+.cat-tree .superior { font-weight: 650; }
+.code-note { margin-top: 0.5rem; }
+.code-note textarea { min-height: 2.5rem; }
+.note-add { margin-top: 0.3rem; }
+
+/* Applied codes: two series, you and the AI (validated pair: light and dark) */
+.viz-root, .viz-legend {
+  --series-you: #2a78d6;
+  --series-ai: #eb6834;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root, :root:where(:not([data-theme="light"])) .viz-legend {
+    --series-you: #3987e5;
+    --series-ai: #d95926;
+  }
+}
+:root[data-theme="dark"] .viz-root, :root[data-theme="dark"] .viz-legend { --series-you: #3987e5; --series-ai: #d95926; }
+.viz-legend { display: flex; gap: 1.2rem; font-size: 0.85rem; color: var(--muted); }
+.viz-legend .key { display: inline-flex; align-items: center; gap: 0.4rem; }
+.swatch { width: 0.8rem; height: 0.8rem; border-radius: 3px; display: inline-block; }
+.swatch.s-you { background: var(--series-you); }
+.swatch.s-ai { background: var(--series-ai); }
+.applied-card h3 { font-size: 1rem; }
+.viz-tree { margin-top: 0.6rem; }
+.viz-row { display: grid; grid-template-columns: minmax(160px, 38%) 1fr; gap: 0.8rem; align-items: center; padding: 0.3rem 0.3rem; border-radius: 6px; }
+.viz-row:hover, .viz-row:focus { background: var(--surface-2); outline: none; }
+.viz-row.level-1 .viz-label { padding-left: 1.4rem; }
+.viz-row.level-2 .viz-label { padding-left: 2.8rem; }
+.viz-row.superior .viz-label { font-weight: 650; }
+.viz-row.superior { margin-top: 0.3rem; }
+.viz-label { font-size: 0.88rem; }
+.viz-bars { display: flex; flex-direction: column; gap: 2px; }
+.viz-bar-line { display: flex; align-items: center; gap: 0.4rem; min-height: 10px; }
+.viz-bar { display: block; height: 8px; border-radius: 0 4px 4px 0; min-width: 0; }
+.viz-bar.b-you { background: var(--series-you); }
+.viz-bar.b-ai { background: var(--series-ai); }
+.viz-num { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 800px) {
+  .viz-row { grid-template-columns: 1fr; gap: 0.2rem; }
+  .tree-actions { flex-wrap: wrap; }
+}
 .option-row.is-sub .opt-label { border-left: 3px solid var(--accent); }
 .choice.level-1 { margin-left: 1.6rem; }
 .choice.level-2 { margin-left: 3.2rem; }
@@ -374,3 +420,12 @@ tr.detail-row td { padding: 0; border-bottom: none; }
   .option-row { grid-template-columns: 1fr; }
   .code-row { flex-direction: column; gap: 0.4rem; }
 }
+
+/* Codes shown on a conversation */
+.applied-codes { font-size: 0.85rem; }
+.applied-codes ul { margin: 0.2rem 0 0.4rem; padding-left: 1.1rem; }
+.applied-codes li { margin: 0.15rem 0; }
+.applied-set-name { font-weight: 650; margin-top: 0.3rem; }
+.applied-codes .code-name { color: var(--muted); }
+.applied-codes .who { font-size: 0.75rem; padding: 0 0.35rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.code-note-text { color: var(--muted); font-style: italic; }

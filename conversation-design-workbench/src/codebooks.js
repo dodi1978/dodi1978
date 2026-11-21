@@ -111,6 +111,8 @@ export function sanitiseCode(input = {}, { keys = new Set() } = {}) {
     definition: text(input.definition, 4000),
     type,
     instructions: text(input.instructions, 4000),
+    // Your own notes on the code (memos); not shown to the AI, and not part of its meaning.
+    memo: text(input.memo, 4000),
   };
   if (type === "category" || type === "multi") code.options = sanitiseOptions(input.options);
   if (type === "scale") {
