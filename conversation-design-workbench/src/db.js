@@ -184,6 +184,21 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS annotations_set_unit_idx ON annotations(set_id, unit_id)`,
   `CREATE INDEX IF NOT EXISTS annotations_conversation_idx ON annotations(conversation_id)`,
+  // Your own code sets saved to the library, for use in any project. A copy: it stays
+  // when the project it came from is deleted.
+  `CREATE TABLE IF NOT EXISTS library_sets (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     description TEXT NOT NULL DEFAULT '',
+     applies_to TEXT NOT NULL,
+     source TEXT NOT NULL DEFAULT '',
+     codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+     from_set_id TEXT,
+     from_project_name TEXT NOT NULL DEFAULT '',
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS library_sets_from_set_idx ON library_sets(from_set_id)`,
 ];
 
 // Creates the tables if they are missing. Safe to run on every cold start.

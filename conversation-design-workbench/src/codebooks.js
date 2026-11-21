@@ -1,7 +1,9 @@
 // Code sets ("codebooks") and the ready-made ones in the library.
 //
 // A code set applies to one kind of unit: user messages, bot replies, pairs (a bot
-// reply with the user message it answers) or whole conversations. Each code in it has
+// reply with the user message it answers) or whole conversations. A code can be coded
+// on another unit than its set's (e.g. conversation-level outcomes in a set of reply
+// evaluations); each unit is then a separate "level" of the set. Each code in it has
 // a result type: yes/no, one category, several categories, a scale, a number or a
 // comment. A code can apply only when another code has certain values (for example
 // the CCSARP request codes only when the message contains a request).
@@ -97,7 +99,7 @@ export function isLeaf(options, value) {
 }
 
 // The parts of a code that change what it means; editing these makes a new version.
-export const MEANING_FIELDS = ["name", "definition", "type", "options", "scale", "condition", "instructions"];
+export const MEANING_FIELDS = ["name", "definition", "type", "options", "scale", "condition", "instructions", "unit"];
 
 export function sanitiseCode(input = {}, { keys = new Set() } = {}) {
   const type = CODE_TYPES[input.type] ? input.type : "category";
@@ -114,6 +116,8 @@ export function sanitiseCode(input = {}, { keys = new Set() } = {}) {
     // Your own notes on the code (memos); not shown to the AI, and not part of its meaning.
     memo: text(input.memo, 4000),
   };
+  // The unit this code is coded on, when it differs from the set's (e.g. a conversation-level code in a set of reply codes).
+  if (UNIT_TYPES[input.unit]) code.unit = input.unit;
   if (type === "category" || type === "multi") code.options = sanitiseOptions(input.options);
   if (type === "scale") {
     const min = Math.round(Number(input.scale?.min ?? 1));
@@ -352,22 +356,31 @@ const offLabels = [
 const BROWN_LEVINSON = {
   name: "Brown & Levinson: politeness strategies",
   appliesTo: "user",
-  description: "Politeness strategies after Brown & Levinson (1987): which positive politeness, negative politeness and off-record strategies occur in the message, or whether a face-threatening act is done bald on record or not done at all.",
+  description: "Politeness after Brown & Levinson (1987), organised by the five superstrategies for doing a face-threatening act (FTA): positive politeness, negative politeness and off record, each with its specific strategies; bald on record; and not doing the FTA.",
   source: "Brown, P. & Levinson, S. C. (1987). Politeness: Some Universals in Language Usage. Cambridge University Press.",
   codes: [
     {
-      key: "strategies", name: "Politeness strategies", type: "multi",
-      definition: "Which of Brown & Levinson's strategies occur in the message: the 15 positive, 10 negative and 15 off-record strategies, bald on record, or no face-threatening act (FTA). Tick all that occur, at the most specific level you can; tick a superior category on its own only if none of its strategies fits.",
-      options: [
-        opt("Positive politeness", "On record with redress to the hearer's positive face (wish to be liked and approved of): friendliness, solidarity, compliments, in-group language."),
-        ...under("Positive politeness", posLabels),
-        opt("Negative politeness", "On record with redress to the hearer's negative face (wish to be unimpeded): indirectness, hedging, apologising, minimising the imposition, deference."),
-        ...under("Negative politeness", negLabels),
-        opt("Off record", "The FTA is performed indirectly so that it can be denied: hints, irony, understatement, rhetorical questions."),
-        ...under("Off record", offLabels),
-        opt("Bald on record", "On record without redress: the FTA is performed directly, clearly and concisely: 'Cancel my appointment.'"),
-        opt("No FTA", "The message contains no face-threatening act, e.g. thanks or a greeting only (or the speaker chooses not to do the FTA)."),
-      ],
+      key: "positive_politeness", name: "Positive politeness", type: "multi",
+      definition: "On record with redress to the hearer's positive face (wish to be liked and approved of): friendliness, solidarity, compliments, in-group language. Tick the strategies that occur; tick none if there is no positive politeness.",
+      options: posLabels.map(([label, definition]) => opt(label, definition)),
+    },
+    {
+      key: "negative_politeness", name: "Negative politeness", type: "multi",
+      definition: "On record with redress to the hearer's negative face (wish to be unimpeded): indirectness, hedging, apologising, minimising the imposition, deference. Tick the strategies that occur; tick none if there is no negative politeness.",
+      options: negLabels.map(([label, definition]) => opt(label, definition)),
+    },
+    {
+      key: "off_record", name: "Off record", type: "multi",
+      definition: "The FTA is performed indirectly so that it can be denied: hints, irony, understatement, rhetorical questions. Tick the strategies that occur; tick none if nothing is off record.",
+      options: offLabels.map(([label, definition]) => opt(label, definition)),
+    },
+    {
+      key: "bald_on_record", name: "Bald on record", type: "yes_no",
+      definition: "On record without redress: an FTA is performed directly, clearly and concisely, e.g. 'Cancel my appointment.'",
+    },
+    {
+      key: "no_fta", name: "No FTA", type: "yes_no",
+      definition: "The message contains no face-threatening act, e.g. thanks or a greeting only (or the speaker chooses not to do the FTA).",
     },
   ],
 };

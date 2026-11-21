@@ -8,12 +8,39 @@ const TYPE_FILTER = [["", "All types"], ["real", "Real users"], ["simulated", "S
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// The chosen codes travel with you between Code by hand and AI coding.
-function subtabs(projectId, current, setId) {
-  const codes = new URLSearchParams(location.hash.split("?")[1] || "").get("codes");
-  const suffix = (key) => (codes && setId && (key === "hand" || key === "ai") ? `?codes=${encodeURIComponent(codes)}` : "");
-  return h("nav", { class: "subtabs", "aria-label": "Coding sections" },
+// The units a set (or a library entry) codes, e.g. "bot replies + whole conversations".
+function unitsLabel(s) {
+  const levels = s.levels ?? [...new Set([s.appliesTo, ...(s.codes ?? []).map((c) => c.unit ?? s.appliesTo)])];
+  return levels.map((l) => UNIT_SHORT[l]).join(" + ");
+}
+
+// The chosen codes travel with you between Code by hand and AI coding, and the chosen
+// level (for sets with codes on more than one unit) between all four pages.
+function subtabs(projectId, current, setId, set = null) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const codes = q.get("codes");
+  const level = set?.levels?.length > 1 ? set.appliesTo : null;
+  const suffix = (key) => {
+    if (!setId || key === "codebook") return "";
+    const p = new URLSearchParams();
+    if (codes && (key === "hand" || key === "ai")) p.set("codes", codes);
+    if (level) p.set("level", level);
+    return [...p].length ? `?${p}` : "";
+  };
+  const nav = h("nav", { class: "subtabs", "aria-label": "Coding sections" },
     PARTS.map(([key, label]) => h("a", { href: `#/p/${projectId}/coding/${key}${setId && key !== "codebook" ? `/${setId}` : ""}${suffix(key)}`, class: key === current ? "active" : "", "aria-current": key === current ? "page" : null }, label)));
+  if (!level) return nav;
+  const levelSwitch = h("nav", { class: "level-switch", "aria-label": "What to code" },
+    h("span", { class: "small muted" }, "This set codes:"),
+    set.levels.map((l) => h("a", { href: `#/p/${projectId}/coding/${current}/${setId}?level=${l}`, class: l === level ? "active" : "", "aria-current": l === level ? "true" : null },
+      `${UNIT_SHORT[l][0].toUpperCase()}${UNIT_SHORT[l].slice(1)} (${plural(set.allCodes.filter((c) => (c.unit ?? set.mainUnit) === l).length, "code")})`)));
+  return h("div", {}, nav, levelSwitch);
+}
+
+// One level of a set: the set as if it applied to that unit, with only that unit's codes.
+function atLevel(set, level) {
+  const lv = set.levels?.includes(level) ? level : set.appliesTo;
+  return { ...set, appliesTo: lv, mainUnit: set.appliesTo, allCodes: set.codes, codes: set.codes.filter((c) => (c.unit ?? set.appliesTo) === lv) };
 }
 
 function query() {
@@ -137,7 +164,7 @@ function withCodes(params, keys) {
 function setPicker(sets, current, onChange) {
   return h("div", { class: "field set-picker" }, h("label", { for: "set-pick" }, "Code set"),
     h("select", { id: "set-pick", onchange: (e) => onChange(e.target.value) },
-      sets.map((s) => h("option", { value: s.id, selected: s.id === current }, `${s.name} (${UNIT_SHORT[s.appliesTo]})`))));
+      sets.map((s) => h("option", { value: s.id, selected: s.id === current }, `${s.name} (${unitsLabel(s)})`))));
 }
 
 export async function codingTab(body, projectId, _overview, extra = []) {
@@ -153,7 +180,8 @@ export async function codingTab(body, projectId, _overview, extra = []) {
     fill(body, subtabs(projectId, part), h("div", { class: "card empty" }, h("p", {}, "There are no code sets yet."), h("a", { class: "button primary", href: `#/p/${projectId}/coding/codebook` }, "Set up the codebook")));
     return;
   }
-  const set = sets.find((s) => s.id === setId);
+  const found = sets.find((s) => s.id === setId);
+  const set = found && atLevel(found, query().get("level"));
   if (!set) {
     location.replace(`#/p/${projectId}/coding/${part}/${sets[0].id}${location.hash.includes("?") ? `?${location.hash.split("?")[1]}` : ""}`);
     return;
@@ -166,13 +194,31 @@ export async function codingTab(body, projectId, _overview, extra = []) {
 
 // ---------- codebook ----------
 
+// Saves a copy of a set to the library (or updates its copy), for use in any project.
+async function saveToLibrary(set, after) {
+  const again = Boolean(set.inLibrary);
+  const ok = await confirmDialog(again
+    ? `Update the library copy of “${set.name}” with its codes as they are now? Projects that already added it keep their own copy.`
+    : `Save “${set.name}” to the library? Every project can then add a copy of its codes (not the coding). Your notes on codes come along.`, again ? "Update" : "Save to library");
+  if (!ok) return;
+  try {
+    const r = await api("POST", `/api/code-sets/${set.id}/promote`);
+    toast(r.updated ? "Library copy updated." : "Saved to the library. Other projects can now add it.");
+    after();
+  } catch (err) {
+    fail(err);
+  }
+}
+
 async function codebookPage(body, projectId, sets, setId) {
   if (setId) return setEditor(body, projectId, setId);
   const { presets } = await api("GET", `/api/projects/${projectId}/code-library`);
   const reload = () => codingTab(body, projectId, null, ["codebook"]).catch(fail);
 
   const setCards = sets.map((s) => h("div", { class: "card set-card" },
-    h("div", { class: "row" }, h("a", { class: "set-title", href: `#/p/${projectId}/coding/codebook/${s.id}` }, s.name), h("span", { class: "spacer" }), h("span", { class: `badge unit-${s.appliesTo}` }, UNIT_SHORT[s.appliesTo])),
+    h("div", { class: "row" }, h("a", { class: "set-title", href: `#/p/${projectId}/coding/codebook/${s.id}` }, s.name), h("span", { class: "spacer" }),
+      s.inLibrary ? h("span", { class: "badge", title: "A copy is in the library for other projects." }, "in library") : null,
+      h("span", { class: `badge unit-${s.appliesTo}` }, unitsLabel(s))),
     h("p", { class: "small muted" }, `${plural(s.codes.length, "code")} · you have coded ${plural(s.humanUnits, "unit")}${s.examples ? ` (${s.examples} as examples)` : ""} · the AI has coded ${plural(s.aiUnits, "unit")}`),
     h("div", { class: "row" },
       h("a", { class: "button", href: `#/p/${projectId}/coding/codebook/${s.id}` }, "Edit codes"),
@@ -180,6 +226,7 @@ async function codebookPage(body, projectId, sets, setId) {
       h("a", { class: "button", href: `#/p/${projectId}/coding/ai/${s.id}` }, "AI coding"),
       h("a", { class: "button", href: `#/p/${projectId}/coding/agreement/${s.id}` }, "Agreement"),
       h("span", { class: "spacer" }),
+      h("button", { class: "link-button", onclick: () => saveToLibrary(s, reload) }, s.inLibrary ? "Update in library" : "Save to library"),
       h("button", { class: "link-button", onclick: async () => { try { await api("POST", `/api/code-sets/${s.id}/duplicate`); reload(); } catch (err) { fail(err); } } }, "Duplicate"),
       h("button", { class: "link-button danger", onclick: async () => {
         if (!(await confirmDialog(`Delete “${s.name}” with its codes and all coding done with it (yours and the AI's)? This cannot be undone.`))) return;
@@ -191,7 +238,7 @@ async function codebookPage(body, projectId, sets, setId) {
         }
       } }, "Delete"))));
 
-  const libCards = presets.map((p) => {
+  const libCard = (p) => {
     const add = h("button", { class: "primary", onclick: async () => {
       const done = busy(add, "Adding…");
       try {
@@ -204,13 +251,26 @@ async function codebookPage(body, projectId, sets, setId) {
       }
     } }, sets.some((s) => s.name === p.name) ? "Add another copy" : "Add to this project");
     return h("div", { class: "card set-card" },
-      h("div", { class: "row" }, h("strong", {}, p.name), h("span", { class: "spacer" }), h("span", { class: `badge unit-${p.appliesTo}` }, UNIT_SHORT[p.appliesTo])),
-      h("p", { class: "small" }, p.description),
-      h("p", { class: "small muted" }, h("em", {}, p.source)),
+      h("div", { class: "row" }, h("strong", {}, p.name), h("span", { class: "spacer" }), h("span", { class: `badge unit-${p.appliesTo}` }, unitsLabel(p))),
+      p.description ? h("p", { class: "small" }, p.description) : null,
+      p.source ? h("p", { class: "small muted" }, h("em", {}, p.source)) : null,
+      p.mine ? h("p", { class: "small muted" }, `Saved from “${p.fromProject}”, ${new Date(p.savedAt).toLocaleDateString()}${p.fromSetId && sets.some((s) => s.id === p.fromSetId) ? " (this project)" : ""}`) : null,
       h("details", { class: "small" }, h("summary", {}, `${plural(p.codeCount, "code")}`), h("ul", { class: "lib-codes" }, (p.codes ?? p.codeNames.map((name) => ({ name }))).map((c) => h("li", {}, c.name,
         c.options?.length ? h("details", {}, h("summary", {}, hasHierarchy(c) ? "Show the hierarchy" : "Show the categories"), categoryTree(c)) : null)))),
-      h("div", { class: "row" }, add));
-  });
+      h("div", { class: "row" }, add, h("span", { class: "spacer" }),
+        p.mine ? h("button", { class: "link-button danger", onclick: async () => {
+          if (!(await confirmDialog(`Remove “${p.name}” from the library? Projects that already added it keep their copy, and so does the project it came from.`, "Remove"))) return;
+          try {
+            await api("DELETE", `/api/code-library/${p.libraryId}`);
+            toast("Removed from the library.");
+            reload();
+          } catch (err) {
+            fail(err);
+          }
+        } }, "Remove from library") : null));
+  };
+  const readyMade = presets.filter((p) => !p.mine).map(libCard);
+  const mine = presets.filter((p) => p.mine).map(libCard);
 
   const name = h("input", { id: "ns-name", placeholder: "e.g. Emotion in user messages", maxlength: 200 });
   const applies = h("select", { id: "ns-applies" }, Object.entries(UNIT_SHORT).map(([k, l]) => h("option", { value: k }, l[0].toUpperCase() + l.slice(1))));
@@ -235,8 +295,11 @@ async function codebookPage(body, projectId, sets, setId) {
     h("h2", { class: "section-title", style: "margin-top:0" }, `Code sets in this project (${sets.length})`),
     sets.length ? h("div", { class: "set-list" }, setCards) : h("p", { class: "muted" }, "No code sets yet. Add one from the library below, or create your own."),
     h("h2", { class: "section-title" }, "Library"),
-    h("p", { class: "muted" }, "Ready-made code sets. Adding one copies it into this project, where you can change anything."),
-    h("div", { class: "persona-grid" }, libCards),
+    h("p", { class: "muted" }, "Adding a code set copies it into this project, where you can change anything."),
+    h("h3", {}, `Your code sets (${mine.length})`),
+    mine.length ? h("div", { class: "persona-grid" }, mine) : h("p", { class: "muted small" }, "None yet. Use “Save to library” on one of your code sets to make it available to all your projects."),
+    h("h3", {}, "Ready-made"),
+    h("div", { class: "persona-grid" }, readyMade),
     newForm);
 }
 
@@ -251,6 +314,7 @@ function codeSummary(code, codes) {
       : `${code.options.length} ${code.options.length === 1 ? "category" : "categories"}`);
   }
   if (code.scale) parts.push(`${code.scale.min}–${code.scale.max}`);
+  if (code.unit) parts.push(`coded on ${UNIT_SHORT[code.unit]}`);
   if (code.condition) {
     const parent = codes.find((c) => c.key === code.condition.codeKey);
     parts.push(`only when ${parent?.name ?? code.condition.codeKey} is ${code.condition.values.map((v) => parent?.options?.find((o) => o.value === v)?.label ?? v).join(" or ")}`);
@@ -304,14 +368,16 @@ async function setEditor(body, projectId, setId) {
         done();
       }
     } },
-      h("div", { class: "row" }, h("h2", { style: "margin:0" }, set.name), h("span", { class: "spacer" }), h("span", { class: `badge unit-${set.appliesTo}` }, `applies to ${UNIT_SHORT[set.appliesTo]}`)),
+      h("div", { class: "row" }, h("h2", { style: "margin:0" }, set.name), h("span", { class: "spacer" }), h("span", { class: `badge unit-${set.appliesTo}` }, `applies to ${unitsLabel(set)}`)),
       set.source ? h("p", { class: "small muted" }, h("em", {}, set.source)) : null,
       h("div", { class: "field" }, h("label", { for: "se-name" }, "Name"), name),
       h("div", { class: "field" }, h("label", { for: "se-desc" }, "Description"), description, h("div", { class: "hint" }, "Shown to the AI as the introduction to the coding scheme.")),
       h("div", { class: "grid-2" },
         h("div", { class: "field" }, h("label", { for: "se-model" }, "AI coder model"), model),
         h("div", { class: "field" }, h("label", { for: "se-effort" }, "AI coder effort"), effort, h("div", { class: "hint" }, "Higher effort may code more carefully, but is slower and costs more."))),
-      saveSet),
+      h("div", { class: "row" }, saveSet, h("span", { class: "spacer" }),
+        set.inLibrary ? h("span", { class: "small muted" }, `In the library (saved ${new Date(set.inLibrary.savedAt).toLocaleDateString()})`) : null,
+        h("button", { type: "button", onclick: () => saveToLibrary(set, reload) }, set.inLibrary ? "Update in library" : "Save to library"))),
     h("div", { class: "card" },
       h("div", { class: "row" }, h("h2", { style: "margin:0" }, `Codes (${set.codes.length})`), h("span", { class: "spacer" }),
         h("button", { class: "primary", onclick: () => { fill(editorHolder, codeEditor(set, null, reload)); editorHolder.scrollIntoView({ behavior: "smooth" }); } }, "+ Add code")),
@@ -419,8 +485,18 @@ function codeEditor(set, code, reload) {
   const scaleMax = h("input", { id: "ce-max", type: "number", min: 1, max: 10, value: c.scale?.max ?? 5 });
   const minLabel = h("input", { id: "ce-minl", value: c.scale?.minLabel ?? "", placeholder: "e.g. Not at all" });
   const maxLabel = h("input", { id: "ce-maxl", value: c.scale?.maxLabel ?? "", placeholder: "e.g. Completely" });
+  // What the code is coded on: normally the set's unit; a set can also hold codes for another unit
+  // (e.g. conversation outcomes in a set of reply evaluations).
+  const unitOf = (x) => x.unit ?? set.appliesTo;
+  const unitSel = h("select", { id: "ce-unit" }, Object.entries(UNIT_SHORT).map(([k, l]) => h("option", { value: k, selected: k === unitOf(c) }, `${l[0].toUpperCase()}${l.slice(1)}${k === set.appliesTo ? " (the set's unit)" : ""}`)));
   const parents = set.codes.filter((p) => p.key !== c.key && ["category", "multi", "yes_no"].includes(p.type));
-  const condParent = h("select", { id: "ce-cond" }, h("option", { value: "" }, "Always"), parents.map((p) => h("option", { value: p.key, selected: c.condition?.codeKey === p.key }, `Only when “${p.name}” is…`)));
+  const condParent = h("select", { id: "ce-cond" });
+  const drawParents = () => {
+    const keep = condParent.value || c.condition?.codeKey;
+    fill(condParent, h("option", { value: "" }, "Always"), parents.filter((p) => unitOf(p) === unitSel.value).map((p) => h("option", { value: p.key, selected: keep === p.key }, `Only when “${p.name}” is…`)));
+  };
+  drawParents();
+  unitSel.addEventListener("change", () => { drawParents(); drawCondValues(); });
   const condValues = h("div", { class: "check-list" });
   const drawCondValues = () => {
     const parent = parents.find((p) => p.key === condParent.value);
@@ -446,7 +522,7 @@ function codeEditor(set, code, reload) {
   const holder = h("form", { class: "card code-editor", onsubmit: async (e) => {
     e.preventDefault();
     const payload = {
-      name: name.value, definition: definition.value, type: type.value, instructions: instructions.value, memo: memo.value,
+      name: name.value, definition: definition.value, type: type.value, instructions: instructions.value, memo: memo.value, unit: unitSel.value,
       options: optionPayload(),
       scale: { min: Number(scaleMin.value), max: Number(scaleMax.value), minLabel: minLabel.value, maxLabel: maxLabel.value },
       condition: condParent.value ? { codeKey: condParent.value, values: [...condValues.querySelectorAll("input:checked")].map((i) => i.value) } : null,
@@ -467,6 +543,8 @@ function codeEditor(set, code, reload) {
     code && code.version >= 1 ? h("p", { class: "hint" }, "Changing the name, definition, type, categories, scale, condition or instructions makes a new version of the code. Existing coding is kept, and Agreement compares only coding done with the same version.") : null,
     h("div", { class: "grid-2" }, h("div", { class: "field" }, h("label", { for: "ce-name" }, "Name"), name), h("div", { class: "field" }, h("label", { for: "ce-type" }, "Result type"), type)),
     h("div", { class: "field" }, h("label", { for: "ce-def" }, "Definition"), definition),
+    h("div", { class: "field" }, h("label", { for: "ce-unit" }, "Coded on"), unitSel,
+      h("div", { class: "hint" }, "Choose another unit to code this once per whole conversation (or per message) in the same set. Coding, AI coding and Agreement then show each unit separately.")),
     optionsBox,
     scaleBox,
     parents.length ? h("div", { class: "field" }, h("label", { for: "ce-cond" }, "Applies"), condParent, condValues) : null,
@@ -545,7 +623,7 @@ async function handPage(body, projectId, sets, set) {
   const keys = selectedKeys(set, params);
   const codes = scoped(set, keys);
   const offset = Number(params.get("offset")) || 0;
-  const list = await api("GET", `/api/code-sets/${set.id}/units?${new URLSearchParams([...params].filter(([k]) => k !== "unit"))}&limit=50&offset=${offset}`);
+  const list = await api("GET", `/api/code-sets/${set.id}/units?${new URLSearchParams([...params].filter(([k]) => k !== "unit" && k !== "level"))}&level=${set.appliesTo}&limit=50&offset=${offset}`);
   const unitId = params.get("unit") || list.units[0]?.unitId;
   const pane = h("div", { class: "card code-pane" });
   const unitList = h("div", { class: "card unit-list" },
@@ -563,7 +641,7 @@ async function handPage(body, projectId, sets, set) {
       offset ? h("button", { onclick: () => { params.set("offset", Math.max(0, offset - 50)); go(projectId, "hand", set.id, params); } }, "Previous") : null,
       list.total > offset + 50 ? h("button", { onclick: () => { params.set("offset", offset + 50); go(projectId, "hand", set.id, params); } }, "Next") : null) : null);
 
-  fill(body, subtabs(projectId, "hand", set.id),
+  fill(body, subtabs(projectId, "hand", set.id, set),
     h("div", { class: "card" },
       h("div", { class: "grid-2" }, setPicker(sets, set.id, (id) => go(projectId, "hand", id, new URLSearchParams([["status", params.get("status")]]))),
         h("div", { class: "field" }, h("label", {}, "Unit"), h("div", { class: "muted small", style: "padding-top:0.5rem" }, `This set codes ${UNIT_SHORT[set.appliesTo]}. ${plural(set.codes.length, "code")}.`))),
@@ -579,7 +657,7 @@ async function handPage(body, projectId, sets, set) {
     fill(pane, h("div", { class: "empty" }, "Nothing to code with these filters."));
     return;
   }
-  const unit = list.units.find((u) => u.unitId === unitId) ?? (await api("GET", `/api/code-sets/${set.id}/units?unitId=${encodeURIComponent(unitId)}`)).units[0];
+  const unit = list.units.find((u) => u.unitId === unitId) ?? (await api("GET", `/api/code-sets/${set.id}/units?unitId=${encodeURIComponent(unitId)}&level=${set.appliesTo}`)).units[0];
   if (!unit) {
     fill(pane, h("p", {}, "That unit is not available."));
     return;
@@ -632,7 +710,7 @@ async function handPage(body, projectId, sets, set) {
     const done = busy(save, "Saving…");
     try {
       // Only the codes on screen are saved; your other codes on this unit stay as they are.
-      await api("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values, notes, isExample: example.checked, codeKeys: codes.map((c) => c.key) });
+      await api("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values, notes, isExample: example.checked, codeKeys: codes.map((c) => c.key), level: set.appliesTo });
       toast("Saved.");
       // Next: the following unit in the list (the saved one may drop out of a "not yet coded" list).
       const i = list.units.findIndex((u) => u.unitId === unit.unitId);
@@ -675,7 +753,7 @@ async function fetchUnitIds(setId, params, max) {
 async function aiPage(body, projectId, sets, set) {
   const params = query();
   if (!params.has("status")) params.set("status", "not_coded_by_ai");
-  const filterParams = new URLSearchParams([...params].filter(([k]) => ["kind", "status", "codes"].includes(k)));
+  const filterParams = new URLSearchParams([...params].filter(([k]) => ["kind", "status", "codes", "level"].includes(k)));
   const keys = selectedKeys(set, params);
   const codeKeys = keys ? scoped(set, keys).map((c) => c.key) : undefined;
   const { total, units } = await api("GET", `/api/code-sets/${set.id}/units?${filterParams}&limit=1`);
@@ -688,7 +766,7 @@ async function aiPage(body, projectId, sets, set) {
       return;
     }
     try {
-      const e = await api("POST", `/api/code-sets/${set.id}/estimate`, { count: n, unitId: units[0].unitId, codeKeys });
+      const e = await api("POST", `/api/code-sets/${set.id}/estimate`, { count: n, unitId: units[0].unitId, codeKeys, level: set.appliesTo });
       estimateText.textContent = `Estimated cost: about $${e.costUsd.toFixed(2)} for ${plural(n, "unit")} with ${e.model}. The AI will see ${e.exampleCount} of your example${e.exampleCount === 1 ? "" : "s"}.`;
     } catch {
       estimateText.textContent = "";
@@ -720,7 +798,7 @@ async function aiPage(body, projectId, sets, set) {
         const id = queue.shift();
         for (let attempt = 0; ; attempt++) {
           try {
-            await api("POST", `/api/code-sets/${set.id}/units/${id}/ai`, codeKeys ? { codeKeys } : {});
+            await api("POST", `/api/code-sets/${set.id}/units/${id}/ai`, { level: set.appliesTo, ...(codeKeys ? { codeKeys } : {}) });
             finished++;
             break;
           } catch (err) {
@@ -749,7 +827,7 @@ async function aiPage(body, projectId, sets, set) {
     codingTab(body, projectId, null, ["ai", set.id]).catch(fail);
   } }, "Start AI coding");
 
-  fill(body, subtabs(projectId, "ai", set.id),
+  fill(body, subtabs(projectId, "ai", set.id, set),
     h("div", { class: "card" },
       setPicker(sets, set.id, (id) => go(projectId, "ai", id, filterParams)),
       h("p", { class: "muted" }, `The AI codes ${UNIT_SHORT[set.appliesTo]} with ${codeKeys ? `${plural(codeKeys.length, "code")} chosen from` : `the ${plural(set.codes.length, "code")} in`} this set, following the definitions and the examples you marked in Code by hand. It gives a short reason for each code. It does not see the interaction type, persona or scenario, only the conversation itself${set.appliesTo === "pair" || set.appliesTo === "bot" ? ", plus the passages and system instructions the bot had" : ""}.`),
@@ -774,7 +852,7 @@ function kappaCell(r) {
 }
 
 async function agreementPage(body, projectId, sets, set) {
-  const data = await api("GET", `/api/code-sets/${set.id}/agreement`);
+  const data = await api("GET", `/api/code-sets/${set.id}/agreement?level=${set.appliesTo}`);
   const reload = () => codingTab(body, projectId, null, ["agreement", set.id]).catch(fail);
   const codesByKey = Object.fromEntries(set.codes.map((c) => [c.key, c]));
   const rows = data.codes.map((r) => {
@@ -794,7 +872,7 @@ async function agreementPage(body, projectId, sets, set) {
           h("button", { onclick: async (e) => {
             const done = busy(e.target, "Saving…");
             try {
-              await api("POST", `/api/code-sets/${set.id}/units/${d.unitId}/accept-ai`, { codeKey: r.key });
+              await api("POST", `/api/code-sets/${set.id}/units/${d.unitId}/accept-ai`, { codeKey: r.key, level: set.appliesTo });
               toast("Changed your code to the AI's.");
               reload();
             } catch (err) {
@@ -828,7 +906,7 @@ async function agreementPage(body, projectId, sets, set) {
     ];
   });
 
-  fill(body, subtabs(projectId, "agreement", set.id),
+  fill(body, subtabs(projectId, "agreement", set.id, set),
     h("div", { class: "card" },
       setPicker(sets, set.id, (id) => go(projectId, "agreement", id)),
       h("p", {}, h("strong", {}, plural(data.unitsCodedByBoth, "unit")), " coded by both you and the AI."),
@@ -850,10 +928,10 @@ async function appliedPage(body, projectId, sets, set) {
   const kind = params.get("kind") || "";
   const usedOnly = params.get("used") === "1";
   const keep = (changes) => {
-    const next = { kind, used: usedOnly ? "1" : "", ...changes };
+    const next = { kind, used: usedOnly ? "1" : "", level: set.levels?.length > 1 ? set.appliesTo : "", ...changes };
     return new URLSearchParams(Object.entries(next).filter(([, v]) => v));
   };
-  const data = await api("GET", `/api/code-sets/${set.id}/frequencies${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`);
+  const data = await api("GET", `/api/code-sets/${set.id}/frequencies?level=${set.appliesTo}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}`);
   const codesByKey = Object.fromEntries(set.codes.map((c) => [c.key, c]));
 
   const legend = h("div", { class: "viz-legend", "aria-hidden": "true" },
@@ -881,7 +959,7 @@ async function appliedPage(body, projectId, sets, set) {
     return h("div", { class: "card applied-card viz-root" }, head, h("div", { class: "viz-tree" }, rows));
   });
 
-  fill(body, subtabs(projectId, "applied", set.id),
+  fill(body, subtabs(projectId, "applied", set.id, set),
     h("div", { class: "card" },
       h("div", { class: "grid-2" },
         setPicker(sets, set.id, (id) => go(projectId, "applied", id, keep({}))),

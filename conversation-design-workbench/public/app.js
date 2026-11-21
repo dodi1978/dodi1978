@@ -1,7 +1,7 @@
 // Conversation Design Workbench: browser side. Plain JavaScript, no build step.
 
 import { state, h, api, toast, fail, when, money, plural, setCrumbs, fill, render, busy, confirmDialog, showDialog, passageView, messageView } from "./ui.js";
-import { personasTab, interactionsTab, createTab } from "./interactions.js";
+import { interactionsTab, createTab } from "./interactions.js";
 import { codingTab } from "./coding.js";
 
 const app = document.getElementById("app");
@@ -119,18 +119,17 @@ const TABS = [
   ["overview", "Overview"],
   ["design", "Chatbot design"],
   ["chat", "Chat"],
-  ["personas", "Personas"],
   ["create", "Create interactions"],
   ["interactions", "Interactions"],
   ["coding", "Coding"],
 ];
 
 // Addresses from before the menu was reorganised still work.
-const MOVED = { documents: "design/rag", bot: "design/settings", simulate: "create" };
+const MOVED = { documents: "design/rag", bot: "design/settings", simulate: "create", personas: "create/personas" };
 
 async function projectPage(projectId, tab, extra) {
   if (MOVED[tab]) {
-    location.replace(`#/p/${projectId}/${MOVED[tab]}`);
+    location.replace(`#/p/${projectId}/${MOVED[tab]}${extra?.length ? `/${extra.join("/")}` : ""}`);
     return;
   }
   const data = await api("GET", `/api/projects/${projectId}`);
@@ -140,7 +139,7 @@ async function projectPage(projectId, tab, extra) {
     TABS.map(([key, label]) => h("a", { href: `#/p/${projectId}/${key}`, class: key === tab ? "active" : "", "aria-current": key === tab ? "page" : null }, label)));
   const body = h("div");
   render(h("h1", {}, project.name), tabs, body);
-  const pages = { overview: overviewTab, design: designTab, chat: chatTab, personas: personasTab, create: createTab, interactions: interactionsTab, coding: codingTab };
+  const pages = { overview: overviewTab, design: designTab, chat: chatTab, create: createTab, interactions: interactionsTab, coding: codingTab };
   await (pages[tab] ?? overviewTab)(body, projectId, data, extra);
 }
 
