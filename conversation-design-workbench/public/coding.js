@@ -8,9 +8,12 @@ const TYPE_FILTER = [["", "All types"], ["real", "Real users"], ["simulated", "S
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The chosen codes travel with you between Code by hand and AI coding.
 function subtabs(projectId, current, setId) {
+  const codes = new URLSearchParams(location.hash.split("?")[1] || "").get("codes");
+  const suffix = (key) => (codes && setId && (key === "hand" || key === "ai") ? `?codes=${encodeURIComponent(codes)}` : "");
   return h("nav", { class: "subtabs", "aria-label": "Coding sections" },
-    PARTS.map(([key, label]) => h("a", { href: `#/p/${projectId}/coding/${key}${setId && key !== "codebook" ? `/${setId}` : ""}`, class: key === current ? "active" : "", "aria-current": key === current ? "page" : null }, label)));
+    PARTS.map(([key, label]) => h("a", { href: `#/p/${projectId}/coding/${key}${setId && key !== "codebook" ? `/${setId}` : ""}${suffix(key)}`, class: key === current ? "active" : "", "aria-current": key === current ? "page" : null }, label)));
 }
 
 function query() {
@@ -22,20 +25,104 @@ function go(projectId, part, setId, params) {
   location.hash = `#/p/${projectId}/coding/${part}${setId ? `/${setId}` : ""}${qs}`;
 }
 
+// ---------- category hierarchies ----------
+
+function ancestors(options, value) {
+  const out = [];
+  let o = options.find((x) => x.value === value);
+  while (o?.parent && out.length < 10) {
+    out.push(o.parent);
+    o = options.find((x) => x.value === o.parent);
+  }
+  return out;
+}
+
+function depthOf(options, value) {
+  return ancestors(options, value).length;
+}
+
+const hasHierarchy = (code) => Boolean(code.options?.some((o) => o.parent));
+
+// "Direct › 1 Mood derivable" for subordinate categories.
+function optionPath(code, value) {
+  const label = (v) => code.options.find((o) => o.value === v)?.label ?? v;
+  return [...ancestors(code.options, value).reverse(), value].map(label).join(" › ");
+}
+
 export function formatValue(code, value) {
   if (value === undefined || value === null) return "–";
   if (code.type === "yes_no") return value ? "Yes" : "No";
-  if (code.type === "category") return code.options.find((o) => o.value === value)?.label ?? value;
-  if (code.type === "multi") return value.length ? value.map((v) => code.options.find((o) => o.value === v)?.label ?? v).join("; ") : "(none)";
+  if (code.type === "category") return optionPath(code, value);
+  if (code.type === "multi") return value.length ? value.map((v) => optionPath(code, v)).join("; ") : "(none)";
   return String(value);
 }
 
-function conditionMet(code, values) {
+// codes: all codes of the set, so a condition on a superior category is met by its subordinates.
+function conditionMet(code, values, codes = []) {
   if (!code.condition) return true;
   const parent = values[code.condition.codeKey];
   if (parent === undefined || parent === null) return false;
-  const have = Array.isArray(parent) ? parent.map(String) : [String(parent)];
+  const parentCode = codes.find((c) => c.key === code.condition.codeKey);
+  const have = (Array.isArray(parent) ? parent.map(String) : [String(parent)])
+    .flatMap((v) => (parentCode?.options ? [v, ...ancestors(parentCode.options, v)] : [v]));
   return code.condition.values.some((v) => have.includes(v));
+}
+
+// ---------- choosing which codes to use ----------
+
+function selectedKeys(set, params) {
+  const raw = (params.get("codes") || "").split(",").filter(Boolean);
+  const valid = raw.filter((k) => set.codes.some((c) => c.key === k));
+  return valid.length ? valid : null;
+}
+
+// The chosen codes plus the codes their conditions depend on, in codebook order.
+function scoped(set, keys) {
+  if (!keys) return set.codes;
+  const want = new Set(keys);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const c of set.codes) {
+      if (want.has(c.key) && c.condition && !want.has(c.condition.codeKey)) {
+        want.add(c.condition.codeKey);
+        grew = true;
+      }
+    }
+  }
+  return set.codes.filter((c) => want.has(c.key));
+}
+
+function codePicker(set, keys, onChange) {
+  const chosen = new Set(keys ?? set.codes.map((c) => c.key));
+  const needed = new Set(scoped(set, [...chosen]).map((c) => c.key));
+  const boxes = set.codes.map((c) => {
+    const autoAdded = !chosen.has(c.key) && needed.has(c.key);
+    return h("label", { class: "check code-pick", title: c.definition || "" },
+      h("input", { type: "checkbox", value: c.key, checked: chosen.has(c.key), style: "width:auto" }),
+      ` ${c.name}`, autoAdded ? h("span", { class: "small muted" }, " (included: another code depends on it)") : null);
+  });
+  const apply = () => {
+    const picked = boxes.map((b) => b.querySelector("input")).filter((i) => i.checked).map((i) => i.value);
+    onChange(picked.length === set.codes.length || !picked.length ? null : picked);
+  };
+  boxes.forEach((b) => b.querySelector("input").addEventListener("change", apply));
+  const summary = keys ? `${keys.length} of ${set.codes.length} codes` : `all ${set.codes.length} codes`;
+  return h("details", { class: "code-picker", open: Boolean(keys) || undefined },
+    h("summary", {}, h("strong", {}, "Codes to use: "), summary),
+    h("p", { class: "hint" }, "Choose which codes to work on. Your other codes on the same units are kept. Codes that another chosen code depends on are included automatically."),
+    h("div", { class: "row", style: "margin-bottom:0.4rem" },
+      h("button", { type: "button", class: "link-button small", onclick: () => onChange(null) }, "All codes"),
+      h("button", { type: "button", class: "link-button small", onclick: () => { boxes.forEach((b) => (b.querySelector("input").checked = false)); } }, "Clear")),
+    h("div", { class: "code-pick-list" }, boxes));
+}
+
+function withCodes(params, keys) {
+  const next = new URLSearchParams(params);
+  if (keys) next.set("codes", keys.join(","));
+  else next.delete("codes");
+  next.delete("unit");
+  next.delete("offset");
+  return next;
 }
 
 function setPicker(sets, current, onChange) {
@@ -144,7 +231,12 @@ async function codebookPage(body, projectId, sets, setId) {
 
 function codeSummary(code, codes) {
   const parts = [state.codeTypes?.[code.type] ?? code.type];
-  if (code.options) parts.push(`${code.options.length} ${code.options.length === 1 ? "category" : "categories"}`);
+  if (code.options) {
+    const top = code.options.filter((o) => !o.parent).length;
+    parts.push(hasHierarchy(code)
+      ? `${code.options.length - top} categories under ${top} superior categories`
+      : `${code.options.length} ${code.options.length === 1 ? "category" : "categories"}`);
+  }
   if (code.scale) parts.push(`${code.scale.min}–${code.scale.max}`);
   if (code.condition) {
     const parent = codes.find((c) => c.key === code.condition.codeKey);
@@ -219,12 +311,30 @@ function codeEditor(set, code, reload) {
   const type = h("select", { id: "ce-type" }, Object.entries(state.codeTypes).map(([k, l]) => h("option", { value: k, selected: k === c.type }, l)));
   const instructions = h("textarea", { id: "ce-instr", rows: 2, placeholder: "Optional: extra guidance for the AI, e.g. how to treat borderline cases" }, c.instructions ?? "");
   const optionList = h("div", { class: "option-list" });
-  const addOption = (o = { value: "", label: "", definition: "" }) => {
-    const row = h("div", { class: "option-row", "data-value": o.value },
+  const labelOf = (value) => (c.options ?? []).find((o) => o.value === value)?.label ?? "";
+  // The "Superior category" list offers the other categories by their current names;
+  // it is refreshed whenever it is opened, so new or renamed categories appear.
+  const fillParents = (select, row, current) => {
+    const labels = [...optionList.querySelectorAll(".option-row")].filter((r) => r !== row)
+      .map((r) => r.querySelector(".opt-label").value.trim()).filter(Boolean);
+    fill(select, h("option", { value: "" }, "— none (top level) —"), labels.map((l) => h("option", { value: l, selected: l === current }, `under “${l}”`)));
+    if (current && !labels.includes(current)) select.value = "";
+  };
+  const addOption = (o = { value: "", label: "", definition: "", parent: "" }) => {
+    const parentSelect = h("select", { class: "opt-parent", "aria-label": "Superior category" });
+    const row = h("div", { class: `option-row ${o.parent ? "is-sub" : ""}`, "data-value": o.value },
       h("input", { class: "opt-label", value: o.label, placeholder: "Category", "aria-label": "Category" }),
       h("input", { class: "opt-def", value: o.definition, placeholder: "Definition or example (optional)", "aria-label": "Definition" }),
+      parentSelect,
       h("button", { type: "button", class: "link-button danger", onclick: () => row.remove() }, "Remove"));
+    parentSelect.dataset.current = labelOf(o.parent) || o.parent || "";
+    parentSelect.addEventListener("focus", () => fillParents(parentSelect, row, parentSelect.value || parentSelect.dataset.current));
+    parentSelect.addEventListener("change", () => {
+      parentSelect.dataset.current = parentSelect.value;
+      row.classList.toggle("is-sub", Boolean(parentSelect.value));
+    });
     optionList.append(row);
+    fillParents(parentSelect, row, parentSelect.dataset.current);
   };
   (c.options ?? []).forEach(addOption);
   const scaleMin = h("input", { id: "ce-min", type: "number", min: 0, max: 9, value: c.scale?.min ?? 1 });
@@ -241,7 +351,9 @@ function codeEditor(set, code, reload) {
   };
   condParent.addEventListener("change", drawCondValues);
   drawCondValues();
-  const optionsBox = h("div", { class: "field" }, h("label", {}, "Categories"), optionList, h("button", { type: "button", onclick: () => addOption() }, "+ Category"));
+  const optionsBox = h("div", { class: "field" }, h("label", {}, "Categories"),
+    h("div", { class: "hint", style: "margin:0 0 0.4rem" }, "To group categories, put subordinate categories under a superior one with the last menu in their row (up to three levels). Coders can then choose either level, and Agreement is also measured at the superior level."),
+    optionList, h("button", { type: "button", onclick: () => addOption() }, "+ Category"));
   const scaleBox = h("div", { class: "grid-4" },
     h("div", { class: "field" }, h("label", { for: "ce-min" }, "From"), scaleMin), h("div", { class: "field" }, h("label", { for: "ce-minl" }, "meaning"), minLabel),
     h("div", { class: "field" }, h("label", { for: "ce-max" }, "To"), scaleMax), h("div", { class: "field" }, h("label", { for: "ce-maxl" }, "meaning"), maxLabel));
@@ -257,7 +369,10 @@ function codeEditor(set, code, reload) {
     e.preventDefault();
     const payload = {
       name: name.value, definition: definition.value, type: type.value, instructions: instructions.value,
-      options: [...optionList.querySelectorAll(".option-row")].map((r) => ({ value: r.dataset.value || undefined, label: r.querySelector(".opt-label").value, definition: r.querySelector(".opt-def").value })),
+      options: [...optionList.querySelectorAll(".option-row")].map((r) => ({
+        value: r.dataset.value || undefined, label: r.querySelector(".opt-label").value, definition: r.querySelector(".opt-def").value,
+        parent: r.querySelector(".opt-parent").value || r.querySelector(".opt-parent").dataset.current || "",
+      })),
       scale: { min: Number(scaleMin.value), max: Number(scaleMax.value), minLabel: minLabel.value, maxLabel: maxLabel.value },
       condition: condParent.value ? { codeKey: condParent.value, values: [...condValues.querySelectorAll("input:checked")].map((i) => i.value) } : null,
     };
@@ -303,18 +418,29 @@ function filterBar(projectId, part, set, params, statusOptions) {
 function codeControl(code, value, onChange) {
   const id = `cv-${code.key}`;
   const hint = code.definition ? h("div", { class: "hint" }, code.definition) : null;
+  // Superior categories are shown in bold, with their subordinate categories indented under them.
+  // Either level can be chosen: the most specific where possible, the superior one if that is all you can say.
+  const choiceClass = (o) => {
+    if (code.type === "yes_no") return "choice";
+    const d = depthOf(code.options, o.value);
+    const superior = code.options.some((x) => x.parent === o.value);
+    return `choice level-${d}${superior ? " superior" : ""}`;
+  };
+  const hierarchyHint = hasHierarchy(code) ? h("div", { class: "hint" }, code.type === "multi"
+    ? "Tick the most specific categories that apply. Tick a superior category (in bold) on its own only if none of its subordinate categories fits."
+    : "Choose the most specific category that applies, or a superior category (in bold) if none of its subordinate categories fits.") : null;
   if (code.type === "category" || code.type === "yes_no") {
     const opts = code.type === "yes_no" ? [{ value: true, label: "Yes" }, { value: false, label: "No" }] : code.options;
-    return h("fieldset", { class: "code-field" }, h("legend", {}, code.name), hint,
-      h("div", { class: "choice-list" }, opts.map((o, i) => h("label", { class: "choice", title: o.definition || "" },
+    return h("fieldset", { class: "code-field" }, h("legend", {}, code.name), hint, hierarchyHint,
+      h("div", { class: "choice-list" }, opts.map((o) => h("label", { class: choiceClass(o), title: o.definition || "" },
         h("input", { type: "radio", name: id, checked: value === o.value, onchange: () => onChange(o.value) }),
         h("span", {}, o.label, o.definition ? h("span", { class: "choice-def" }, o.definition) : null)))),
       value !== undefined ? h("button", { type: "button", class: "link-button small", onclick: () => onChange(undefined) }, "Clear") : null);
   }
   if (code.type === "multi") {
     const current = new Set(value ?? []);
-    return h("fieldset", { class: "code-field" }, h("legend", {}, code.name), hint,
-      h("div", { class: "choice-list" }, code.options.map((o) => h("label", { class: "choice", title: o.definition || "" },
+    return h("fieldset", { class: "code-field" }, h("legend", {}, code.name), hint, hierarchyHint,
+      h("div", { class: "choice-list" }, code.options.map((o) => h("label", { class: choiceClass(o), title: o.definition || "" },
         h("input", { type: "checkbox", checked: current.has(o.value), onchange: (e) => { if (e.target.checked) current.add(o.value); else current.delete(o.value); onChange([...current]); } }),
         h("span", {}, o.label, o.definition ? h("span", { class: "choice-def" }, o.definition) : null)))));
   }
@@ -340,6 +466,8 @@ function unitPreview(unit) {
 async function handPage(body, projectId, sets, set) {
   const params = query();
   if (!params.has("status")) params.set("status", "not_coded_by_me");
+  const keys = selectedKeys(set, params);
+  const codes = scoped(set, keys);
   const offset = Number(params.get("offset")) || 0;
   const list = await api("GET", `/api/code-sets/${set.id}/units?${new URLSearchParams([...params].filter(([k]) => k !== "unit"))}&limit=50&offset=${offset}`);
   const unitId = params.get("unit") || list.units[0]?.unitId;
@@ -363,7 +491,8 @@ async function handPage(body, projectId, sets, set) {
     h("div", { class: "card" },
       h("div", { class: "grid-2" }, setPicker(sets, set.id, (id) => go(projectId, "hand", id, new URLSearchParams([["status", params.get("status")]]))),
         h("div", { class: "field" }, h("label", {}, "Unit"), h("div", { class: "muted small", style: "padding-top:0.5rem" }, `This set codes ${UNIT_SHORT[set.appliesTo]}. ${plural(set.codes.length, "code")}.`))),
-      filterBar(projectId, "hand", set, params, [["not_coded_by_me", "Not yet coded by me"], ["coded_by_me", "Coded by me"], ["examples", "My examples for the AI"], ["coded_by_ai", "Coded by the AI"], ["", "All"]])),
+      filterBar(projectId, "hand", set, params, [["not_coded_by_me", "Not yet coded by me (with these codes)"], ["coded_by_me", "Coded by me"], ["examples", "My examples for the AI"], ["coded_by_ai", "Coded by the AI"], ["", "All"]]),
+      codePicker(set, keys, (k) => go(projectId, "hand", set.id, withCodes(params, k)))),
     h("div", { class: "coding-layout" }, unitList, pane));
 
   if (!set.codes.length) {
@@ -395,8 +524,8 @@ async function handPage(body, projectId, sets, set) {
   const form = h("div", { class: "code-form" });
   let showAi = false;
   const drawForm = () => {
-    fill(form, set.codes.map((code) => {
-      if (!conditionMet(code, values)) return null;
+    fill(form, codes.map((code) => {
+      if (!conditionMet(code, values, set.codes)) return null;
       const control = codeControl(code, values[code.key], (v) => {
         if (v === undefined) delete values[code.key];
         else values[code.key] = v;
@@ -416,7 +545,8 @@ async function handPage(body, projectId, sets, set) {
   const save = h("button", { class: "primary", type: "button", onclick: async () => {
     const done = busy(save, "Saving…");
     try {
-      await api("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values, isExample: example.checked });
+      // Only the codes on screen are saved; your other codes on this unit stay as they are.
+      await api("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values, isExample: example.checked, codeKeys: codes.map((c) => c.key) });
       toast("Saved.");
       // Next: the following unit in the list (the saved one may drop out of a "not yet coded" list).
       const i = list.units.findIndex((u) => u.unitId === unit.unitId);
@@ -459,7 +589,9 @@ async function fetchUnitIds(setId, params, max) {
 async function aiPage(body, projectId, sets, set) {
   const params = query();
   if (!params.has("status")) params.set("status", "not_coded_by_ai");
-  const filterParams = new URLSearchParams([...params].filter(([k]) => ["kind", "status"].includes(k)));
+  const filterParams = new URLSearchParams([...params].filter(([k]) => ["kind", "status", "codes"].includes(k)));
+  const keys = selectedKeys(set, params);
+  const codeKeys = keys ? scoped(set, keys).map((c) => c.key) : undefined;
   const { total, units } = await api("GET", `/api/code-sets/${set.id}/units?${filterParams}&limit=1`);
   const count = h("input", { id: "ai-count", type: "number", min: 1, max: Math.max(1, total), value: Math.min(total, 20) });
   const estimateText = h("div", { class: "small muted" });
@@ -470,7 +602,7 @@ async function aiPage(body, projectId, sets, set) {
       return;
     }
     try {
-      const e = await api("POST", `/api/code-sets/${set.id}/estimate`, { count: n, unitId: units[0].unitId });
+      const e = await api("POST", `/api/code-sets/${set.id}/estimate`, { count: n, unitId: units[0].unitId, codeKeys });
       estimateText.textContent = `Estimated cost: about $${e.costUsd.toFixed(2)} for ${plural(n, "unit")} with ${e.model}. The AI will see ${e.exampleCount} of your example${e.exampleCount === 1 ? "" : "s"}.`;
     } catch {
       estimateText.textContent = "";
@@ -502,7 +634,7 @@ async function aiPage(body, projectId, sets, set) {
         const id = queue.shift();
         for (let attempt = 0; ; attempt++) {
           try {
-            await api("POST", `/api/code-sets/${set.id}/units/${id}/ai`);
+            await api("POST", `/api/code-sets/${set.id}/units/${id}/ai`, codeKeys ? { codeKeys } : {});
             finished++;
             break;
           } catch (err) {
@@ -534,9 +666,10 @@ async function aiPage(body, projectId, sets, set) {
   fill(body, subtabs(projectId, "ai", set.id),
     h("div", { class: "card" },
       setPicker(sets, set.id, (id) => go(projectId, "ai", id, filterParams)),
-      h("p", { class: "muted" }, `The AI codes ${UNIT_SHORT[set.appliesTo]} with the ${plural(set.codes.length, "code")} in this set, following the definitions and the examples you marked in Code by hand. It gives a short reason for each code. It does not see the interaction type, persona or scenario, only the conversation itself${set.appliesTo === "pair" || set.appliesTo === "bot" ? ", plus the passages and system instructions the bot had" : ""}.`),
+      h("p", { class: "muted" }, `The AI codes ${UNIT_SHORT[set.appliesTo]} with ${codeKeys ? `${plural(codeKeys.length, "code")} chosen from` : `the ${plural(set.codes.length, "code")} in`} this set, following the definitions and the examples you marked in Code by hand. It gives a short reason for each code. It does not see the interaction type, persona or scenario, only the conversation itself${set.appliesTo === "pair" || set.appliesTo === "bot" ? ", plus the passages and system instructions the bot had" : ""}.`),
       h("p", { class: "small" }, `AI coder: ${state.session.models.find((m) => m.id === set.ai.model)?.label ?? set.ai.model}, effort ${set.ai.effort}. `, h("a", { href: `#/p/${projectId}/coding/codebook/${set.id}` }, "Change")),
-      filterBar(projectId, "ai", set, params, [["not_coded_by_ai", "Not yet coded by the AI"], ["coded_by_me", "Coded by me (to compare with the AI)"], ["", "All (re-code)"]]),
+      filterBar(projectId, "ai", set, params, [["not_coded_by_ai", "Not yet coded by the AI (with these codes)"], ["coded_by_me", "Coded by me (to compare with the AI)"], ["", "All (re-code)"]]),
+      codePicker(set, keys, (k) => go(projectId, "ai", set.id, withCodes(params, k))),
       h("p", {}, h("strong", {}, plural(total, "unit")), " match."),
       h("div", { class: "row" }, h("div", { class: "field", style: "max-width:160px;margin:0" }, h("label", { for: "ai-count" }, "How many to code"), count), start),
       estimateText,
@@ -599,6 +732,12 @@ async function agreementPage(body, projectId, sets, set) {
         h("td", {}, r.percentAgreement === null || r.percentAgreement === undefined ? "–" : `${Math.round(r.percentAgreement * 100)}%`),
         h("td", {}, kappaCell(r)),
         h("td", {}, toggle)),
+      r.superior ? h("tr", { class: "superior-row" },
+        h("td", {}, h("span", { class: "small" }, "↳ at the level of superior categories"), h("div", { class: "small muted" }, r.superior.categories.join(" / "))),
+        h("td", {}, r.superior.n),
+        h("td", {}, r.superior.percentAgreement === null || r.superior.percentAgreement === undefined ? "–" : `${Math.round(r.superior.percentAgreement * 100)}%`),
+        h("td", {}, kappaCell({ ...r.superior, type: r.type })),
+        h("td", {})) : null,
       h("tr", { class: "detail-row" }, h("td", { colspan: 5 }, detail)),
     ];
   });

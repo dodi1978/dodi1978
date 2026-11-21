@@ -48,14 +48,17 @@ test("the library offers the five code sets, and the rapport set follows the pro
 
   const ccsarp = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" });
   const codes = ccsarp.data.set.codes;
-  assert.equal(codes.length, 8);
+  assert.equal(codes.length, 6);
   assert.deepEqual(codes[0].options.map((o) => o.value), ["request", "no_request"]);
-  assert.equal(codes.find((c) => c.key === "head_act").options.length, 9);
+  const head = codes.find((c) => c.key === "head_act");
+  assert.equal(head.options.length, 12, "3 directness levels with the 9 strategies under them");
+  assert.deepEqual(head.options.filter((o) => !o.parent).map((o) => o.value), ["direct", "conventionally_indirect", "non_conventionally_indirect"]);
+  assert.equal(head.options.find((o) => o.value === "7_query_preparatory").parent, "conventionally_indirect");
   assert.ok(codes.slice(1).every((c) => c.condition?.codeKey === "speech_act" && c.condition.values[0] === "request"), "request codes apply only to requests");
 
   const bl = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "brown_levinson" });
   const counts = bl.data.set.codes.map((c) => c.options.length);
-  assert.deepEqual(counts, [5, 15, 10, 15], "superstrategies, then 15 positive, 10 negative and 15 off-record strategies");
+  assert.deepEqual(counts, [5, 43], "superstrategies; then 3 superior categories with the 15 positive, 10 negative and 15 off-record strategies");
 
   await call("PUT", `/api/projects/${projectId}/framework`, { framework: { name: "Mine", dimensions: [{ name: "Warmth", definition: "d", builds: ["Friendly"], breaks: ["Cold"] }] } });
   const rapport = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "rapport" });
@@ -91,15 +94,15 @@ test("units are listed per set type, and coding by hand respects conditions", as
   const thanks = units.data.units.find((u) => u.text === "Thanks!");
 
   const saved = await call("PUT", `/api/code-sets/${set.id}/units/${polite.unitId}`, {
-    values: { speech_act: "request", head_act: "7_query_preparatory_conventionally_indir", perspective: "hearer_oriented", lexical_downgraders: ["downtoner", "nonsense"], alerters: ["attention_getter_greeting"] },
+    values: { speech_act: "request", head_act: "7_query_preparatory", perspective: "hearer_oriented", internal_modification: ["downtoner", "nonsense"], alerters: ["attention_getter_greeting"] },
     isExample: true,
   });
   assert.equal(saved.status, 200, JSON.stringify(saved.data));
-  assert.equal(saved.data.human.head_act.value, "7_query_preparatory_conventionally_indir");
-  assert.deepEqual(saved.data.human.lexical_downgraders.value, ["downtoner"], "unknown categories are dropped");
+  assert.equal(saved.data.human.head_act.value, "7_query_preparatory");
+  assert.deepEqual(saved.data.human.internal_modification.value, ["downtoner"], "unknown categories are dropped");
   assert.equal(saved.data.isExample, true);
 
-  const noRequest = await call("PUT", `/api/code-sets/${set.id}/units/${thanks.unitId}`, { values: { speech_act: "no_request", head_act: "1_mood_derivable_direct" } });
+  const noRequest = await call("PUT", `/api/code-sets/${set.id}/units/${thanks.unitId}`, { values: { speech_act: "no_request", head_act: "1_mood_derivable" } });
   assert.deepEqual(Object.keys(noRequest.data.human), ["speech_act"], "request codes do not apply to a non-request");
 
   const notMine = await call("GET", `/api/code-sets/${set.id}/units?status=not_coded_by_me`);
@@ -122,8 +125,8 @@ test("the AI codes a unit using the scheme and the researcher's examples, and ag
   const units = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units;
   const polite = units.find((u) => /possibly/.test(u.text));
   const blunt = units.find((u) => /now/.test(u.text));
-  await call("PUT", `/api/code-sets/${set.id}/units/${polite.unitId}`, { values: { speech_act: "request", head_act: "7_query_preparatory_conventionally_indir" }, isExample: true });
-  await call("PUT", `/api/code-sets/${set.id}/units/${blunt.unitId}`, { values: { speech_act: "request", head_act: "1_mood_derivable_direct" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${polite.unitId}`, { values: { speech_act: "request", head_act: "7_query_preparatory" }, isExample: true });
+  await call("PUT", `/api/code-sets/${set.id}/units/${blunt.unitId}`, { values: { speech_act: "request", head_act: "1_mood_derivable" } });
 
   const est = await call("POST", `/api/code-sets/${set.id}/estimate`, { count: 10, unitId: blunt.unitId });
   assert.ok(est.data.costUsd > 0);
@@ -132,7 +135,7 @@ test("the AI codes a unit using the scheme and the researcher's examples, and ag
   const coded = await call("POST", `/api/code-sets/${set.id}/units/${blunt.unitId}/ai`);
   assert.equal(coded.status, 200, JSON.stringify(coded.data));
   assert.equal(coded.data.ai.speech_act.value, "request");
-  assert.equal(coded.data.ai.head_act.value, "5_want_statement_direct");
+  assert.equal(coded.data.ai.head_act.value, "5_want_statement");
   assert.match(coded.data.ai.head_act.explanation, /head_act/);
   assert.equal(coded.data.exampleCount, 1);
 
@@ -157,7 +160,7 @@ test("the AI codes a unit using the scheme and the researcher's examples, and ag
   assert.ok(head.disagreements.every((d) => d.explanation), "the AI's reasons are shown with each disagreement");
 
   const accepted = await call("POST", `/api/code-sets/${set.id}/units/${blunt.unitId}/accept-ai`, { codeKey: "head_act" });
-  assert.equal(accepted.data.human.head_act.value, "5_want_statement_direct");
+  assert.equal(accepted.data.human.head_act.value, "5_want_statement");
   assert.equal(accepted.data.human.speech_act.value, "request", "other codes are kept");
 
   const s = (await call("PATCH", `/api/codes/${set.codes[1].id}`, { definition: "Changed." })).data.set;
@@ -183,4 +186,63 @@ test("bot replies are coded with the passages and system instructions; deleting 
   assert.match(prompt, /CHATBOT REPLY TO CODE/);
   await call("DELETE", `/api/code-sets/${set.id}`);
   assert.equal((await call("GET", `/api/projects/${projectId}/code-sets`)).data.sets.length, 0);
+});
+
+test("categories can sit under superior categories, and conditions follow the hierarchy", async () => {
+  const { sanitiseCode, conditionMet, topLevel } = await import("../src/codebooks.js");
+  const code = sanitiseCode({
+    name: "Tone", type: "category",
+    options: [{ label: "Warm", parent: "Positive" }, { label: "Negative" }, { label: "Positive" }, { label: "Curt", parent: "Negative" }, { label: "Loop A", parent: "Loop B" }, { label: "Loop B", parent: "Loop A" }],
+  });
+  assert.deepEqual(code.options.map((o) => [o.value, o.parent ?? ""]),
+    [["negative", ""], ["curt", "negative"], ["positive", ""], ["warm", "positive"], ["loop_a", ""], ["loop_b", "loop_a"]],
+    "tree order; parents given by label; a loop is broken but both categories are kept");
+  assert.equal(topLevel(code.options, "warm"), "positive");
+  const child = { condition: { codeKey: "tone", values: ["positive"] } };
+  assert.equal(conditionMet(child, { tone: "warm" }, code), true, "a subordinate category meets a condition on its superior category");
+  assert.equal(conditionMet(child, { tone: "curt" }, code), false);
+});
+
+test("coding only some codes keeps the others, for you and for the AI", async (t) => {
+  const claude = fakeClaude();
+  const { call, projectId } = await setup(t, { claude });
+  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" })).data.set;
+  const unit = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units.find((u) => /possibly/.test(u.text));
+  await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values: { speech_act: "request", head_act: "7_query_preparatory", perspective: "hearer_oriented" } });
+  // Now code only the internal modification: head act and perspective stay.
+  const later = await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { codeKeys: ["internal_modification"], values: { speech_act: "request", internal_modification: ["downtoner", "conditional"] } });
+  assert.deepEqual(Object.keys(later.data.human).sort(), ["head_act", "internal_modification", "perspective", "speech_act"]);
+  assert.equal(later.data.human.head_act.value, "7_query_preparatory");
+  // Status filters follow the chosen codes.
+  const notYet = await call("GET", `/api/code-sets/${set.id}/units?status=not_coded_by_me&codes=alerters`);
+  assert.ok(notYet.data.units.some((u) => u.unitId === unit.unitId) === false, "speech_act (needed by alerters) counts as coded");
+
+  // The AI codes only the head act (plus "contains a request", which it depends on).
+  await call("POST", `/api/code-sets/${set.id}/units/${unit.unitId}/ai`);
+  const before = claude.calls.length;
+  const partial = await call("POST", `/api/code-sets/${set.id}/units/${unit.unitId}/ai`, { codeKeys: ["head_act"] });
+  assert.equal(partial.status, 200, JSON.stringify(partial.data));
+  const req = claude.calls[before];
+  assert.deepEqual(Object.keys(req.schema.properties).sort(), ["head_act", "speech_act"]);
+  assert.doesNotMatch(req.system, /### perspective/);
+  assert.match(req.system, /indented categories are subordinate/);
+  assert.ok(partial.data.ai.perspective, "the AI's other codes are kept");
+  const est = await call("POST", `/api/code-sets/${set.id}/estimate`, { count: 10, unitId: unit.unitId, codeKeys: ["head_act"] });
+  const estAll = await call("POST", `/api/code-sets/${set.id}/estimate`, { count: 10, unitId: unit.unitId });
+  assert.ok(est.data.costUsd < estAll.data.costUsd, "fewer codes cost less");
+});
+
+test("agreement is also measured at the level of superior categories", async (t) => {
+  const { call, projectId } = await setup(t, { claude: fakeClaude() });
+  const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" })).data.set;
+  const units = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units.filter((u) => u.text !== "Thanks!");
+  // The fake AI codes "5 Want statement" (direct). Code one unit 5 (same) and one 4 (same level, other strategy).
+  await call("PUT", `/api/code-sets/${set.id}/units/${units[0].unitId}`, { values: { speech_act: "request", head_act: "5_want_statement" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${units[1].unitId}`, { values: { speech_act: "request", head_act: "4_obligation_statement" } });
+  for (const u of units) await call("POST", `/api/code-sets/${set.id}/units/${u.unitId}/ai`, { codeKeys: ["head_act"] });
+  const agr = await call("GET", `/api/code-sets/${set.id}/agreement`);
+  const head = agr.data.codes.find((c) => c.key === "head_act");
+  assert.equal(head.percentAgreement, 0.5, "strategies: one of two agree");
+  assert.equal(head.superior.percentAgreement, 1, "directness level: both agree");
+  assert.deepEqual(head.superior.categories, ["Direct", "Conventionally indirect", "Non-conventionally indirect"]);
 });

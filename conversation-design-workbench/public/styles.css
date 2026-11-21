@@ -323,7 +323,18 @@ dialog.wide { width: min(900px, calc(100vw - 32px)); }
 .code-actions { display: flex; gap: 0.3rem; align-items: center; flex-shrink: 0; }
 .code-editor { border-color: var(--accent); }
 .option-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.5rem; }
-.option-row { display: grid; grid-template-columns: minmax(140px, 1fr) 2fr auto; gap: 0.5rem; align-items: center; }
+.option-row { display: grid; grid-template-columns: minmax(140px, 1fr) 2fr minmax(150px, 1fr) auto; gap: 0.5rem; align-items: center; }
+.option-row.is-sub .opt-label { border-left: 3px solid var(--accent); }
+.choice.level-1 { margin-left: 1.6rem; }
+.choice.level-2 { margin-left: 3.2rem; }
+.choice.superior > span { font-weight: 650; }
+.choice.superior .choice-def { font-weight: 400; }
+.choice.superior { margin-top: 0.35rem; }
+.code-picker { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem; margin-top: 0.4rem; }
+.code-picker > summary { cursor: pointer; }
+.code-pick-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.3rem 1rem; }
+.code-pick { font-weight: 400; margin: 0; }
+tr.superior-row td { border-bottom: 1px dashed var(--border); padding-top: 0.2rem; }
 .set-picker select { max-width: 100%; }
 .coding-layout { display: grid; grid-template-columns: 300px 1fr; gap: 1rem; align-items: start; }
 .unit-list { padding: 0.6rem; max-height: 80vh; overflow-y: auto; }

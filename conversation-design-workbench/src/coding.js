@@ -1,13 +1,41 @@
 // Coding: code sets, units to code, coding by hand, AI coding and agreement.
 
 import { randomUUID } from "node:crypto";
-import { UNIT_TYPES, CODE_TYPES, MEANING_FIELDS, sanitiseCode, cleanValue, conditionMet, presetList, presetCodes } from "./codebooks.js";
+import { UNIT_TYPES, CODE_TYPES, MEANING_FIELDS, sanitiseCode, cleanValue, conditionMet, presetList, presetCodes, hasHierarchy, topLevel } from "./codebooks.js";
 import { agreementFor, interpretKappa } from "./agreement.js";
 import { frameworkOf } from "./framework.js";
 import { modelInfo, claudeCost, DEFAULT_MODEL } from "./pricing.js";
 
 const NA = "__not_applicable__";
 const MAX_EXAMPLES = 8;
+
+// Codes chosen for one coding session ("codes=a,b"), plus any codes their conditions
+// depend on, so a condition can always be decided. No choice means all codes.
+export function parseKeys(v) {
+  if (Array.isArray(v)) return v.map(String).filter(Boolean);
+  if (typeof v === "string" && v.trim()) return v.split(",").map((s) => s.trim()).filter(Boolean);
+  return null;
+}
+
+export function scopeCodes(codes, keys) {
+  if (!keys || !keys.length) return codes;
+  const want = new Set(keys);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const c of codes) {
+      if (want.has(c.key) && c.condition && !want.has(c.condition.codeKey)) {
+        want.add(c.condition.codeKey);
+        grew = true;
+      }
+    }
+  }
+  const scoped = codes.filter((c) => want.has(c.key));
+  return scoped.length ? scoped : codes;
+}
+
+function meets(code, values, codes) {
+  return conditionMet(code, values, code.condition ? codes.find((c) => c.key === code.condition.codeKey) : undefined);
+}
 
 export function codingRoutes({ HttpError, loadProject, requireText, logClaude }) {
   // ---------- code sets and codes ----------
@@ -178,9 +206,10 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
   // ---------- units ----------
 
   // Filters on the conversations the units come from, as on the Interactions page.
-  function unitQuery(set, q, extraWhere = [], extraParams = []) {
-    const params = [set.project_id, ...extraParams];
-    const where = ["c.project_id = $1", ...extraWhere];
+  // codeIds: when coding only some codes, "coded" means coded with at least one of them.
+  function unitQuery(set, q, codeIds = null) {
+    const params = [set.project_id];
+    const where = ["c.project_id = $1"];
     const add = (sql, value) => {
       params.push(value);
       where.push(sql.replace("?", `$${params.length}`));
@@ -201,7 +230,16 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
       return setParamName;
     };
     const unitCol = set.applies_to === "conversation" ? "c.id" : "m.id";
-    const coded = (coder) => `EXISTS (SELECT 1 FROM annotations a WHERE a.set_id = ${setParam()} AND a.unit_id = ${unitCol} AND a.coder = '${coder}')`;
+    let codesParamName = null;
+    const codeFilter = () => {
+      if (!codeIds) return "";
+      if (!codesParamName) {
+        params.push(codeIds);
+        codesParamName = `$${params.length}`;
+      }
+      return ` AND a.code_id = ANY(${codesParamName})`;
+    };
+    const coded = (coder) => `EXISTS (SELECT 1 FROM annotations a WHERE a.set_id = ${setParam()} AND a.unit_id = ${unitCol} AND a.coder = '${coder}'${codeFilter()})`;
     const status = q.get("status");
     if (status === "not_coded_by_me") where.push(`NOT ${coded("human")}`);
     if (status === "coded_by_me") where.push(coded("human"));
@@ -242,7 +280,9 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
   async function listUnits({ db }, { id }, _body, url) {
     const set = await loadSet(db, id);
     const q = url?.searchParams ?? new URLSearchParams();
-    const { sql, select, params } = unitQuery(set, q);
+    const keys = parseKeys(q.get("codes"));
+    const codeIds = keys ? scopeCodes(await codesOf(db, id), keys).map((c) => c.id) : null;
+    const { sql, select, params } = unitQuery(set, q, codeIds);
     const limit = Math.min(200, Math.max(1, Number(q.get("limit")) || 50));
     const offset = Math.max(0, Number(q.get("offset")) || 0);
     const [{ total }] = await db.query(`SELECT count(*)::int AS total ${sql}`, params);
@@ -276,28 +316,42 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
 
   // ---------- coding by hand ----------
 
+  // Rewrites one coder's annotations for a unit. entries: key → { value, explanation, version, model }.
+  // Codes whose condition is no longer met are dropped, so the coding stays consistent.
+  async function writeAnnotations(db, set, unit, unitId, coder, codes, entries, isExample = false) {
+    const values = Object.fromEntries(Object.entries(entries).map(([k, e]) => [k, e.value]));
+    await db.query("DELETE FROM annotations WHERE set_id = $1 AND unit_id = $2 AND coder = $3", [set.id, unitId, coder]);
+    for (const code of codes) {
+      const e = entries[code.key];
+      if (!e || e.value === undefined || !meets(code, values, codes)) continue;
+      await db.query(
+        `INSERT INTO annotations (id, project_id, set_id, code_id, unit_type, unit_id, conversation_id, coder, value, explanation, is_example, code_version, model)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [randomUUID(), set.project_id, set.id, code.id, set.applies_to, unitId, unit.conversation.id, coder, JSON.stringify(e.value), String(e.explanation ?? "").slice(0, 2000), coder === "human" && isExample, e.version ?? code.version, e.model ?? null],
+      );
+    }
+  }
+
+  // body.codeKeys: the codes coded in this session; your other codes on the unit are kept.
   async function saveHuman({ db }, { id, unitId }, body) {
     const set = await loadSet(db, id);
     const unit = await loadUnit(db, set, unitId);
     const codes = await codesOf(db, id);
+    const scope = new Set(scopeCodes(codes, parseKeys(body.codeKeys)).map((c) => c.key));
+    const existing = groupAnnotations(await annotationsFor(db, id, [unitId]))[unitId];
     const raw = body.values && typeof body.values === "object" ? body.values : {};
-    const values = {};
-    for (const code of codes) {
-      const v = cleanValue(code, raw[code.key]);
-      if (v !== undefined) values[code.key] = v;
-    }
-    const [{ was_example }] = await db.query("SELECT COALESCE(bool_or(is_example), false) AS was_example FROM annotations WHERE set_id = $1 AND unit_id = $2 AND coder = 'human'", [id, unitId]);
-    const isExample = body.isExample === undefined ? was_example : Boolean(body.isExample);
-    await db.query("DELETE FROM annotations WHERE set_id = $1 AND unit_id = $2 AND coder = 'human'", [id, unitId]);
     const notes = body.notes && typeof body.notes === "object" ? body.notes : {};
+    const entries = {};
     for (const code of codes) {
-      if (!conditionMet(code, values) || values[code.key] === undefined) continue;
-      await db.query(
-        `INSERT INTO annotations (id, project_id, set_id, code_id, unit_type, unit_id, conversation_id, coder, value, explanation, is_example, code_version)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'human', $8, $9, $10, $11)`,
-        [randomUUID(), set.project_id, id, code.id, set.applies_to, unitId, unit.conversation.id, JSON.stringify(values[code.key]), String(notes[code.key] ?? "").slice(0, 2000), isExample, code.version],
-      );
+      if (scope.has(code.key)) {
+        const v = cleanValue(code, raw[code.key]);
+        if (v !== undefined) entries[code.key] = { value: v, explanation: notes[code.key] ?? existing?.human?.[code.key]?.explanation ?? "", version: code.version };
+      } else if (existing?.human?.[code.key]) {
+        entries[code.key] = existing.human[code.key];
+      }
     }
+    const isExample = body.isExample === undefined ? Boolean(existing?.isExample) : Boolean(body.isExample);
+    await writeAnnotations(db, set, unit, unitId, "human", codes, entries, isExample);
     const grouped = groupAnnotations(await annotationsFor(db, id, [unitId]));
     return { unitId, ...(grouped[unitId] ?? { human: {}, ai: {}, isExample: false }) };
   }
@@ -324,7 +378,7 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
       for (const k of Object.keys(values)) delete values[k];
       for (const [k, v] of Object.entries(grouped.ai)) values[k] = v.value;
     }
-    return saveHuman(ctx, { id, unitId }, { values, notes });
+    return saveHuman(ctx, { id, unitId }, { values, notes, ...(body.codeKey ? { codeKeys: [body.codeKey] } : {}) });
   }
 
   // ---------- AI coding ----------
@@ -361,7 +415,15 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
       const labels = code.condition.values.map((v) => parent?.options?.find((o) => o.value === v)?.label ?? v);
       lines.push(`Applies only when ${parent?.name ?? code.condition.codeKey} is ${labels.join(" or ")}. Otherwise set "applies" to false.`);
     }
-    if (code.options) lines.push(...code.options.map((o) => `- ${o.value}: ${o.label}${o.definition ? `. ${o.definition}` : ""}`));
+    if (code.options) {
+      const depth = (o) => (o.parent ? 1 + depth(code.options.find((p) => p.value === o.parent) ?? {}) : 0);
+      lines.push(...code.options.map((o) => `${"  ".repeat(depth(o))}- ${o.value}: ${o.label}${o.definition ? `. ${o.definition}` : ""}`));
+      if (hasHierarchy(code)) {
+        lines.push(code.type === "multi"
+          ? "Categories are grouped: indented categories are subordinate to the category above them. Give the most specific categories that apply; give a superior category on its own only when none of its subordinate categories fits."
+          : "Categories are grouped: indented categories are subordinate to the category above them. Choose the most specific category that applies; choose a superior category only when none of its subordinate categories fits.");
+      }
+    }
     if (code.scale) lines.push(`Scale from ${code.scale.min}${code.scale.minLabel ? ` (${code.scale.minLabel})` : ""} to ${code.scale.max}${code.scale.maxLabel ? ` (${code.scale.maxLabel})` : ""}.`);
     if (code.type === "multi") lines.push("Give every category that applies; an empty list if none do.");
     if (code.instructions) lines.push(`Coding instructions: ${code.instructions}`);
@@ -440,37 +502,33 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
     return { system, user: `${unitText(set, unit)}\n\nCode this unit with every code in the scheme.`, exampleCount: examples.length };
   }
 
-  async function aiCodeUnit(ctx, { id, unitId }) {
+  // body.codeKeys: code only these (plus what their conditions need); the AI's other codes are kept.
+  async function aiCodeUnit(ctx, { id, unitId }, body = {}) {
     const { db, claude } = ctx;
     const set = await loadSet(db, id);
-    const codes = await codesOf(db, id);
-    if (!codes.length) throw new HttpError(400, "Add codes to this set first.");
+    const allCodes = await codesOf(db, id);
+    if (!allCodes.length) throw new HttpError(400, "Add codes to this set first.");
+    const codes = scopeCodes(allCodes, parseKeys(body.codeKeys));
     const unit = await loadUnit(db, set, unitId);
     const { system, user, exampleCount } = await buildPrompt(db, set, codes, unit, unitId);
     const ai = { model: set.data?.ai?.model ?? DEFAULT_MODEL, effort: set.data?.ai?.effort ?? "low" };
     const result = await claude.complete({ model: ai.model, effort: ai.effort, system, messages: [{ role: "user", content: user }], maxTokens: 6000, schema: codingSchema(codes) });
     await logClaude(db, set.project_id, result, "AI coding");
     if (result.refused || !result.json) throw new HttpError(502, "The AI could not code this unit.");
-    const values = {};
-    const explanations = {};
-    for (const code of codes) {
+    const existing = groupAnnotations(await annotationsFor(db, id, [unitId]))[unitId];
+    const inScope = new Set(codes.map((c) => c.key));
+    const entries = {};
+    for (const code of allCodes) {
+      if (!inScope.has(code.key)) {
+        if (existing?.ai?.[code.key]) entries[code.key] = { ...existing.ai[code.key], model: existing.aiModel };
+        continue;
+      }
       const r = result.json[code.key];
       if (!r || (code.condition && r.applies === false)) continue;
       const v = cleanValue(code, r.value);
-      if (v !== undefined) {
-        values[code.key] = v;
-        explanations[code.key] = String(r.explanation ?? "").slice(0, 2000);
-      }
+      if (v !== undefined) entries[code.key] = { value: v, explanation: r.explanation ?? "", version: code.version, model: result.model };
     }
-    await db.query("DELETE FROM annotations WHERE set_id = $1 AND unit_id = $2 AND coder = 'ai'", [id, unitId]);
-    for (const code of codes) {
-      if (!conditionMet(code, values) || values[code.key] === undefined) continue;
-      await db.query(
-        `INSERT INTO annotations (id, project_id, set_id, code_id, unit_type, unit_id, conversation_id, coder, value, explanation, is_example, code_version, model)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'ai', $8, $9, false, $10, $11)`,
-        [randomUUID(), set.project_id, id, code.id, set.applies_to, unitId, unit.conversation.id, JSON.stringify(values[code.key]), explanations[code.key], code.version, result.model],
-      );
-    }
+    await writeAnnotations(db, set, unit, unitId, "ai", allCodes, entries);
     const grouped = groupAnnotations(await annotationsFor(db, id, [unitId]));
     return { unitId, exampleCount, ...(grouped[unitId] ?? { human: {}, ai: {} }) };
   }
@@ -478,7 +536,7 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
   // A rough cost estimate before an AI coding run, from the prompt for one unit.
   async function estimate({ db }, { id }, body) {
     const set = await loadSet(db, id);
-    const codes = await codesOf(db, id);
+    const codes = scopeCodes(await codesOf(db, id), parseKeys(body.codeKeys));
     const count = Math.max(0, Math.min(10000, Number(body.count) || 0));
     if (!codes.length || !count) return { count, costUsd: 0 };
     const sample = body.unitId;
@@ -541,7 +599,19 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
         }
       }
       const r = agreementFor(code, pairs);
-      return { codeId: code.id, key: code.key, name: code.name, type: code.type, outdated, ...r, interpretation: interpretKappa(r.kappa), disagreements };
+      // With superior and subordinate categories, also compare at the superior level
+      // (e.g. directness level as well as head act strategy).
+      let superior;
+      if (hasHierarchy(code) && pairs.length) {
+        const up = (v) => (v === NA ? NA : topLevel(code.options, v));
+        const superPairs = pairs.map(([a, b]) => (code.type === "multi"
+          ? [[...new Set(a.map(up))].sort(), [...new Set(b.map(up))].sort()]
+          : [up(a), up(b)]));
+        const topOptions = code.options.filter((o) => !o.parent);
+        const s = agreementFor({ ...code, options: topOptions }, superPairs);
+        superior = { ...s, interpretation: interpretKappa(s.kappa), categories: topOptions.map((o) => o.label) };
+      }
+      return { codeId: code.id, key: code.key, name: code.name, type: code.type, outdated, ...r, interpretation: interpretKappa(r.kappa), disagreements, ...(superior ? { superior } : {}) };
     });
     return { unitsCodedByBoth: both.length, codes: results };
   }

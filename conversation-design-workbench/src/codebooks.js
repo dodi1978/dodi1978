@@ -28,17 +28,72 @@ export function slug(name) {
   return String(name).toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "code";
 }
 
+export const MAX_DEPTH = 3;
+
+// Categories can sit under a superior category: { parent: <its value or label> }.
+// Parents are resolved after all values are known; unknown parents and cycles are
+// dropped, and nesting is limited to MAX_DEPTH levels. Categories come out in tree
+// order (each superior category followed by its subordinate ones).
 function sanitiseOptions(options) {
   const used = new Set();
-  return (Array.isArray(options) ? options : []).slice(0, 60).map((o) => {
+  const list = (Array.isArray(options) ? options : []).slice(0, 120).map((o) => {
     const label = text(o?.label ?? o?.value, 120);
     if (!label) return null;
     let value = /^[a-z0-9_]{1,40}$/.test(o?.value ?? "") ? o.value : slug(label);
     const base = value;
     for (let i = 2; used.has(value); i++) value = `${base}_${i}`.slice(0, 40);
     used.add(value);
-    return { value, label, definition: text(o?.definition, 1500) };
+    return { value, label, definition: text(o?.definition, 1500), parentRef: o?.parent ? String(o.parent) : "" };
   }).filter(Boolean);
+  const byValue = new Map(list.map((o) => [o.value, o]));
+  const byLabel = new Map(list.map((o) => [o.label.toLowerCase(), o]));
+  for (const o of list) {
+    const p = byValue.get(o.parentRef) ?? byLabel.get(o.parentRef.toLowerCase());
+    o.parent = p && p !== o ? p.value : "";
+  }
+  // Break cycles and over-deep nesting.
+  const depth = (o, seen = new Set()) => {
+    if (!o.parent) return 1;
+    if (seen.has(o.value)) return Infinity;
+    seen.add(o.value);
+    return 1 + depth(byValue.get(o.parent), seen);
+  };
+  for (const o of list) if (depth(o) > MAX_DEPTH) o.parent = "";
+  const children = (parent) => list.filter((o) => o.parent === parent);
+  const ordered = [];
+  const walk = (parent) => {
+    for (const o of children(parent)) {
+      ordered.push(o.parent ? { value: o.value, label: o.label, definition: o.definition, parent: o.parent } : { value: o.value, label: o.label, definition: o.definition });
+      walk(o.value);
+    }
+  };
+  walk("");
+  return ordered;
+}
+
+// ---------- category hierarchies ----------
+
+export function hasHierarchy(code) {
+  return Boolean(code.options?.some((o) => o.parent));
+}
+
+export function ancestors(options, value) {
+  const out = [];
+  let o = options.find((x) => x.value === value);
+  while (o?.parent && out.length < 10) {
+    out.push(o.parent);
+    o = options.find((x) => x.value === o.parent);
+  }
+  return out;
+}
+
+export function topLevel(options, value) {
+  const a = ancestors(options, value);
+  return a.length ? a[a.length - 1] : value;
+}
+
+export function isLeaf(options, value) {
+  return !options.some((o) => o.parent === value);
 }
 
 // The parts of a code that change what it means; editing these makes a new version.
@@ -104,17 +159,22 @@ export function cleanValue(code, value) {
 }
 
 // Whether a code applies, given the other values for the same unit (its condition).
-export function conditionMet(code, values) {
+// parentCode: the code the condition refers to; when given, a subordinate category
+// also meets a condition on its superior category.
+export function conditionMet(code, values, parentCode) {
   if (!code.condition) return true;
   const parent = values[code.condition.codeKey];
   if (parent === undefined || parent === null) return false;
   const have = Array.isArray(parent) ? parent.map(String) : [String(parent)];
-  return code.condition.values.some((v) => have.includes(v));
+  const expanded = parentCode?.options ? have.flatMap((v) => [v, ...ancestors(parentCode.options, v)]) : have;
+  return code.condition.values.some((v) => expanded.includes(v));
 }
 
 // ---------- the library ----------
 
-const opt = (label, definition) => ({ label, definition });
+// parent: the label of the superior category, for subordinate categories.
+const opt = (label, definition, parent) => (parent ? { label, definition, parent } : { label, definition });
+const under = (parent, list) => list.map(([label, definition]) => opt(label, definition, parent));
 
 const CCSARP_REQUESTS = {
   name: "CCSARP: requests",
@@ -132,17 +192,26 @@ const CCSARP_REQUESTS = {
     },
     {
       key: "head_act", name: "Head act strategy", type: "category", condition: { codeKey: "speech_act", values: ["request"] },
-      definition: "The strategy of the head act (the minimal unit that realises the request), on CCSARP's nine-point scale of directness. Strategies 1–5 are direct, 6–7 conventionally indirect, 8–9 non-conventionally indirect. If the message has several requests, code the main one.",
+      definition: "The strategy of the head act (the minimal unit that realises the request), on CCSARP's nine-point scale of directness, grouped into the three main levels of directness. Code the specific strategy where possible. If the message has several requests, code the main one.",
       options: [
-        opt("1 Mood derivable (direct)", "The grammatical mood of the verb signals the request, typically an imperative: 'Tell me the opening hours.'"),
-        opt("2 Explicit performative (direct)", "The request is explicitly named with a performative verb: 'I am asking you to cancel my appointment.'"),
-        opt("3 Hedged performative (direct)", "The performative verb is modified by a hedge: 'I would like to ask you to cancel it.'"),
-        opt("4 Obligation statement (direct)", "The hearer's obligation to act is stated (locution derivable): 'You have to cancel it.' / 'You need to tell me.'"),
-        opt("5 Want statement (direct)", "The speaker's wish or desire that the act be carried out is stated (scope stating): 'I want to cancel my appointment.' / 'I need the opening hours.'"),
-        opt("6 Suggestory formula (conventionally indirect)", "A suggestion to do something: 'How about telling me the times?' / 'Why don't you check for me?'"),
-        opt("7 Query preparatory (conventionally indirect)", "Reference to preparatory conditions (ability, willingness, possibility), conventionalised in the language: 'Can you tell me the opening hours?' / 'Could I cancel online?'"),
-        opt("8 Strong hint (non-conventionally indirect)", "Partial reference to an object or element needed to carry out the act: 'I can't find the cancellation page.'"),
-        opt("9 Mild hint (non-conventionally indirect)", "No reference to the request proper, but interpretable as a request in context: 'I have an appointment tomorrow and something has come up.'"),
+        opt("Direct", "The request is marked as a request by grammatical, lexical or semantic means (strategies 1–5)."),
+        ...under("Direct", [
+          ["1 Mood derivable", "The grammatical mood of the verb signals the request, typically an imperative: 'Tell me the opening hours.'"],
+          ["2 Explicit performative", "The request is explicitly named with a performative verb: 'I am asking you to cancel my appointment.'"],
+          ["3 Hedged performative", "The performative verb is modified by a hedge: 'I would like to ask you to cancel it.'"],
+          ["4 Obligation statement", "The hearer's obligation to act is stated (locution derivable): 'You have to cancel it.' / 'You need to tell me.'"],
+          ["5 Want statement", "The speaker's wish or desire that the act be carried out is stated (scope stating): 'I want to cancel my appointment.' / 'I need the opening hours.'"],
+        ]),
+        opt("Conventionally indirect", "The request is made through conventionalised reference to preconditions or a suggestion (strategies 6–7)."),
+        ...under("Conventionally indirect", [
+          ["6 Suggestory formula", "A suggestion to do something: 'How about telling me the times?' / 'Why don't you check for me?'"],
+          ["7 Query preparatory", "Reference to preparatory conditions (ability, willingness, possibility), conventionalised in the language: 'Can you tell me the opening hours?' / 'Could I cancel online?'"],
+        ]),
+        opt("Non-conventionally indirect", "The request is made by hints that rely on context (strategies 8–9)."),
+        ...under("Non-conventionally indirect", [
+          ["8 Strong hint", "Partial reference to an object or element needed to carry out the act: 'I can't find the cancellation page.'"],
+          ["9 Mild hint", "No reference to the request proper, but interpretable as a request in context: 'I have an appointment tomorrow and something has come up.'"],
+        ]),
       ],
     },
     {
@@ -168,60 +237,63 @@ const CCSARP_REQUESTS = {
       ],
     },
     {
-      key: "syntactic_downgraders", name: "Internal modification: syntactic downgraders", type: "multi", condition: { codeKey: "speech_act", values: ["request"] },
-      definition: "Syntactic choices within the head act that soften the request. Tick all that occur.",
+      key: "internal_modification", name: "Internal modification", type: "multi", condition: { codeKey: "speech_act", values: ["request"] },
+      definition: "Elements within the head act that soften (downgraders) or strengthen (upgraders) the request. Tick all that occur, at the most specific level you can.",
       options: [
-        opt("Interrogative", "The request is phrased as a question: 'Can you…?'"),
-        opt("Negation", "Negation of a preparatory condition: 'You couldn't tell me…, could you?'"),
-        opt("Subjunctive", "Subjunctive mood: 'Might it be possible…?'"),
-        opt("Conditional", "Conditional verb forms: 'Could you…?' / 'Would you…?'"),
-        opt("Aspect", "Durative or progressive aspect: 'I'm wondering if…'"),
-        opt("Tense", "Past tense with present meaning: 'I wanted to ask…' / 'I was wondering…'"),
-        opt("Conditional clause", "'…if you could…' / 'if it's not too much trouble'"),
-        opt("Embedding", "The request is embedded in another clause: 'I'd appreciate it if…' / 'I wonder whether…'"),
-      ],
-    },
-    {
-      key: "lexical_downgraders", name: "Internal modification: lexical and phrasal downgraders", type: "multi", condition: { codeKey: "speech_act", values: ["request"] },
-      definition: "Words or phrases within the head act that soften the request. Tick all that occur.",
-      options: [
-        opt("Politeness marker", "'Please'."),
-        opt("Understater", "Minimises the object of the request: 'a bit', 'a little', 'just a quick question'."),
-        opt("Hedge", "Avoids precise commitment: 'somehow', 'kind of', 'sort of'."),
-        opt("Subjectivizer", "The speaker's personal opinion frames the request: 'I think', 'I'm afraid', 'I wonder'."),
-        opt("Downtoner", "Modulates the impact: 'possibly', 'perhaps', 'maybe', 'by any chance'."),
-        opt("Cajoler", "Seeks to restore harmony: 'you know', 'I mean', 'actually'."),
-        opt("Appealer", "Appeals to the hearer's understanding, often a tag: 'okay?', 'right?', 'won't you?'"),
-        opt("Consultative device", "Seeks the hearer's cooperation: 'Do you think…?', 'Would you mind…?'"),
-      ],
-    },
-    {
-      key: "upgraders", name: "Internal modification: upgraders", type: "multi", condition: { codeKey: "speech_act", values: ["request"] },
-      definition: "Elements that increase the force of the request. Tick all that occur.",
-      options: [
-        opt("Intensifier", "'really', 'so', 'very', 'terribly'."),
-        opt("Commitment indicator", "'certainly', 'surely', 'definitely'."),
-        opt("Expletive", "Swearing or strong exclamations."),
-        opt("Time intensifier", "'now', 'immediately', 'right away', 'ASAP'."),
-        opt("Lexical uptoner", "Marked, negatively loaded wording: 'this useless system', 'that mess'."),
-        opt("Determination marker", "Signals the speaker's determination: 'I've told you already', 'I insist'."),
-        opt("Repetition of request", "The request is repeated, in the same or another message."),
-        opt("Orthographic emphasis (adapted for chat)", "Capitals, repeated punctuation or letters, emphasis markers: 'NOW', '!!!', 'pleeease'. Adapted from CCSARP's suprasegmental emphasis for written chat."),
+        opt("Syntactic downgraders", "Syntactic choices within the head act that soften the request."),
+        ...under("Syntactic downgraders", [
+          ["Interrogative", "The request is phrased as a question: 'Can you…?'"],
+          ["Negation", "Negation of a preparatory condition: 'You couldn't tell me…, could you?'"],
+          ["Subjunctive", "Subjunctive mood: 'Might it be possible…?'"],
+          ["Conditional", "Conditional verb forms: 'Could you…?' / 'Would you…?'"],
+          ["Aspect", "Durative or progressive aspect: 'I'm wondering if…'"],
+          ["Tense", "Past tense with present meaning: 'I wanted to ask…' / 'I was wondering…'"],
+          ["Conditional clause", "'…if you could…' / 'if it's not too much trouble'"],
+          ["Embedding", "The request is embedded in another clause: 'I'd appreciate it if…' / 'I wonder whether…'"],
+        ]),
+        opt("Lexical and phrasal downgraders", "Words or phrases within the head act that soften the request."),
+        ...under("Lexical and phrasal downgraders", [
+          ["Politeness marker", "'Please'."],
+          ["Understater", "Minimises the object of the request: 'a bit', 'a little', 'just a quick question'."],
+          ["Hedge", "Avoids precise commitment: 'somehow', 'kind of', 'sort of'."],
+          ["Subjectivizer", "The speaker's personal opinion frames the request: 'I think', 'I'm afraid', 'I wonder'."],
+          ["Downtoner", "Modulates the impact: 'possibly', 'perhaps', 'maybe', 'by any chance'."],
+          ["Cajoler", "Seeks to restore harmony: 'you know', 'I mean', 'actually'."],
+          ["Appealer", "Appeals to the hearer's understanding, often a tag: 'okay?', 'right?', 'won't you?'"],
+          ["Consultative device", "Seeks the hearer's cooperation: 'Do you think…?', 'Would you mind…?'"],
+        ]),
+        opt("Upgraders", "Elements that increase the force of the request."),
+        ...under("Upgraders", [
+          ["Intensifier", "'really', 'so', 'very', 'terribly'."],
+          ["Commitment indicator", "'certainly', 'surely', 'definitely'."],
+          ["Expletive", "Swearing or strong exclamations."],
+          ["Time intensifier", "'now', 'immediately', 'right away', 'ASAP'."],
+          ["Lexical uptoner", "Marked, negatively loaded wording: 'this useless system', 'that mess'."],
+          ["Determination marker", "Signals the speaker's determination: 'I've told you already', 'I insist'."],
+          ["Repetition of request", "The request is repeated, in the same or another message."],
+          ["Orthographic emphasis (adapted for chat)", "Capitals, repeated punctuation or letters, emphasis markers: 'NOW', '!!!', 'pleeease'. Adapted from CCSARP's suprasegmental emphasis for written chat."],
+        ]),
       ],
     },
     {
       key: "supportive_moves", name: "External modification: supportive moves", type: "multi", condition: { codeKey: "speech_act", values: ["request"] },
-      definition: "Moves outside the head act that mitigate or aggravate the request. Tick all that occur.",
+      definition: "Moves outside the head act that mitigate or aggravate the request. Tick all that occur, at the most specific level you can.",
       options: [
-        opt("Preparator", "Prepares the hearer for the request: 'I have a question about my appointment.'"),
-        opt("Getting a precommitment", "Tries to commit the hearer first: 'Could you do me a favour?'"),
-        opt("Grounder", "Gives reasons or explanations: 'Something has come up at work, so…'"),
-        opt("Disarmer", "Anticipates and removes possible objection: 'I know you're busy, but…'"),
-        opt("Promise of reward", "Offers something in return: 'I'll rate you five stars if…'"),
-        opt("Imposition minimiser", "Reduces the imposition: 'only if it's easy', 'just this once'."),
-        opt("Aggravating: insult", "Insults the hearer: 'You're useless.'"),
-        opt("Aggravating: threat", "Threatens consequences: 'or I'll complain.'"),
-        opt("Aggravating: moralising", "Appeals to moral norms: 'You should be helping people.'"),
+        opt("Mitigating supportive moves", "Moves that soften the request."),
+        ...under("Mitigating supportive moves", [
+          ["Preparator", "Prepares the hearer for the request: 'I have a question about my appointment.'"],
+          ["Getting a precommitment", "Tries to commit the hearer first: 'Could you do me a favour?'"],
+          ["Grounder", "Gives reasons or explanations: 'Something has come up at work, so…'"],
+          ["Disarmer", "Anticipates and removes possible objection: 'I know you're busy, but…'"],
+          ["Promise of reward", "Offers something in return: 'I'll rate you five stars if…'"],
+          ["Imposition minimiser", "Reduces the imposition: 'only if it's easy', 'just this once'."],
+        ]),
+        opt("Aggravating supportive moves", "Moves that increase the force or face threat of the request."),
+        ...under("Aggravating supportive moves", [
+          ["Insult", "Insults the hearer: 'You're useless.'"],
+          ["Threat", "Threatens consequences: 'or I'll complain.'"],
+          ["Moralising", "Appeals to moral norms: 'You should be helping people.'"],
+        ]),
       ],
     },
   ],
@@ -273,7 +345,6 @@ const offLabels = [
   ["14 Displace H", "Address the act as if to someone else."],
   ["15 Be incomplete, use ellipsis", "Leave the act half done: 'Well, if you could…'"],
 ];
-const toOptions = (list) => list.map(([label, definition]) => opt(label, definition));
 
 const BROWN_LEVINSON = {
   name: "Brown & Levinson: politeness strategies",
@@ -292,9 +363,18 @@ const BROWN_LEVINSON = {
         opt("No FTA", "The message contains no face-threatening act, e.g. thanks or a greeting only."),
       ],
     },
-    { key: "positive_strategies", name: "Positive politeness strategies", type: "multi", definition: "Which of Brown & Levinson's 15 positive politeness strategies occur in the message. Tick all that occur.", options: toOptions(posLabels) },
-    { key: "negative_strategies", name: "Negative politeness strategies", type: "multi", definition: "Which of Brown & Levinson's 10 negative politeness strategies occur in the message. Tick all that occur.", options: toOptions(negLabels) },
-    { key: "off_record_strategies", name: "Off-record strategies", type: "multi", definition: "Which of Brown & Levinson's 15 off-record strategies occur in the message. Tick all that occur.", options: toOptions(offLabels) },
+    {
+      key: "strategies", name: "Politeness strategies", type: "multi",
+      definition: "Which of Brown & Levinson's specific strategies occur in the message: the 15 positive, 10 negative and 15 off-record strategies. Tick all that occur, at the most specific level you can.",
+      options: [
+        opt("Positive politeness", "Strategies oriented to the hearer's positive face."),
+        ...under("Positive politeness", posLabels),
+        opt("Negative politeness", "Strategies oriented to the hearer's negative face."),
+        ...under("Negative politeness", negLabels),
+        opt("Off record", "Strategies that leave the act open to interpretation."),
+        ...under("Off record", offLabels),
+      ],
+    },
   ],
 };
 
@@ -367,7 +447,10 @@ function rapportSet(framework) {
         opt("Breaks", d.breaks.length ? `Shows behaviour that breaks rapport, e.g. ${d.breaks.slice(0, 3).join("; ").toLowerCase()}.` : "Breaks rapport on this dimension."),
       ],
     });
-    const behaviours = [...d.builds.map((b) => opt(`Builds: ${b}`, "")), ...d.breaks.map((b) => opt(`Breaks: ${b}`, ""))];
+    const behaviours = [
+      ...(d.builds.length ? [opt("Builds rapport", "Behaviours that build rapport on this dimension."), ...d.builds.map((b) => opt(b, "", "Builds rapport"))] : []),
+      ...(d.breaks.length ? [opt("Breaks rapport", "Behaviours that break rapport on this dimension."), ...d.breaks.map((b) => opt(b, "", "Breaks rapport"))] : []),
+    ];
     if (behaviours.length) {
       codes.push({
         key: `${d.key}_behaviours`, name: `${d.name}: behaviours`, type: "multi", condition: { codeKey: `${d.key}_effect`, values: ["builds", "breaks"] },
