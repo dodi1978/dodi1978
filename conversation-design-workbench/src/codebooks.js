@@ -185,15 +185,16 @@ const CCSARP_REQUESTS = {
   source: "Blum-Kulka, S., House, J. & Kasper, G. (Eds.) (1989). Cross-Cultural Pragmatics: Requests and Apologies. Ablex.",
   codes: [
     {
-      key: "speech_act", name: "Contains a request", type: "category",
-      definition: "Whether the message contains a request: an attempt to get the hearer (here the chatbot) to do something, including asking for information or an action.",
+      key: "request_type", name: "Request type", type: "category",
+      definition: "Whether the message contains a request (an attempt to get the hearer, here the chatbot, to do something) and, if so, what kind. If the message has several requests, code the main one.",
       options: [
-        opt("Request", "The message contains at least one request (for information, action, help or a service)."),
         opt("No request", "The message contains no request, e.g. thanks, a greeting, a statement or feedback only."),
+        opt("Request for information", "The user asks the bot to tell them something, e.g. 'When are you open?'"),
+        opt("Request for action", "The user asks the bot to do something, e.g. book, change or cancel an appointment, or put them through to a person."),
       ],
     },
     {
-      key: "head_act", name: "Head act strategy", type: "category", condition: { codeKey: "speech_act", values: ["request"] },
+      key: "head_act", name: "Head act strategy", type: "category", condition: { codeKey: "request_type", values: ["request_for_information", "request_for_action"] },
       definition: "The strategy of the head act (the minimal unit that realises the request), on CCSARP's nine-point scale of directness, grouped into the three main levels of directness. Code the specific strategy where possible. If the message has several requests, code the main one.",
       options: [
         opt("Direct", "The request is marked as a request by grammatical, lexical or semantic means (strategies 1–5)."),
@@ -217,7 +218,7 @@ const CCSARP_REQUESTS = {
       ],
     },
     {
-      key: "perspective", name: "Request perspective", type: "category", condition: { codeKey: "speech_act", values: ["request"] },
+      key: "perspective", name: "Request perspective", type: "category", condition: { codeKey: "request_type", values: ["request_for_information", "request_for_action"] },
       definition: "Whose role is emphasised in the head act.",
       options: [
         opt("Hearer-oriented", "Emphasis on the hearer as agent: 'Can you tell me…?'"),
@@ -227,7 +228,7 @@ const CCSARP_REQUESTS = {
       ],
     },
     {
-      key: "alerters", name: "Alerters", type: "multi", condition: { codeKey: "speech_act", values: ["request"] },
+      key: "alerters", name: "Alerters", type: "multi", condition: { codeKey: "request_type", values: ["request_for_information", "request_for_action"] },
       definition: "Elements that get the hearer's attention before the request. Tick all that occur; tick none if there are none.",
       options: [
         opt("Attention getter / greeting", "'Hi', 'Hello', 'Excuse me', 'Hey there'."),
@@ -239,7 +240,7 @@ const CCSARP_REQUESTS = {
       ],
     },
     {
-      key: "internal_modification", name: "Internal modification", type: "multi", condition: { codeKey: "speech_act", values: ["request"] },
+      key: "internal_modification", name: "Internal modification", type: "multi", condition: { codeKey: "request_type", values: ["request_for_information", "request_for_action"] },
       definition: "Elements within the head act that soften (downgraders) or strengthen (upgraders) the request. Tick all that occur, at the most specific level you can.",
       options: [
         opt("Syntactic downgraders", "Syntactic choices within the head act that soften the request."),
@@ -278,7 +279,7 @@ const CCSARP_REQUESTS = {
       ],
     },
     {
-      key: "supportive_moves", name: "External modification: supportive moves", type: "multi", condition: { codeKey: "speech_act", values: ["request"] },
+      key: "supportive_moves", name: "External modification: supportive moves", type: "multi", condition: { codeKey: "request_type", values: ["request_for_information", "request_for_action"] },
       definition: "Moves outside the head act that mitigate or aggravate the request. Tick all that occur, at the most specific level you can.",
       options: [
         opt("Mitigating supportive moves", "Moves that soften the request."),
@@ -351,30 +352,21 @@ const offLabels = [
 const BROWN_LEVINSON = {
   name: "Brown & Levinson: politeness strategies",
   appliesTo: "user",
-  description: "Politeness strategies after Brown & Levinson (1987): the superstrategy used for the main face-threatening act in the message, and the specific positive, negative and off-record strategies that occur.",
+  description: "Politeness strategies after Brown & Levinson (1987): which positive politeness, negative politeness and off-record strategies occur in the message, or whether a face-threatening act is done bald on record or not done at all.",
   source: "Brown, P. & Levinson, S. C. (1987). Politeness: Some Universals in Language Usage. Cambridge University Press.",
   codes: [
     {
-      key: "superstrategy", name: "Superstrategy", type: "category",
-      definition: "The main politeness superstrategy used to perform the face-threatening act (FTA) in the message, e.g. a request or a complaint. If the message contains no FTA, choose 'No FTA'.",
-      options: [
-        opt("Bald on record", "The FTA is performed directly, clearly and concisely, with no redress: 'Cancel my appointment.'"),
-        opt("Positive politeness", "Redress oriented to the hearer's positive face (wish to be liked and approved of): friendliness, solidarity, compliments, in-group language."),
-        opt("Negative politeness", "Redress oriented to the hearer's negative face (wish to be unimpeded): indirectness, hedging, apologising, minimising the imposition, deference."),
-        opt("Off record", "The FTA is performed indirectly so that it can be denied: hints, irony, understatement, rhetorical questions."),
-        opt("No FTA", "The message contains no face-threatening act, e.g. thanks or a greeting only."),
-      ],
-    },
-    {
       key: "strategies", name: "Politeness strategies", type: "multi",
-      definition: "Which of Brown & Levinson's specific strategies occur in the message: the 15 positive, 10 negative and 15 off-record strategies. Tick all that occur, at the most specific level you can.",
+      definition: "Which of Brown & Levinson's strategies occur in the message: the 15 positive, 10 negative and 15 off-record strategies, bald on record, or no face-threatening act (FTA). Tick all that occur, at the most specific level you can; tick a superior category on its own only if none of its strategies fits.",
       options: [
-        opt("Positive politeness", "Strategies oriented to the hearer's positive face."),
+        opt("Positive politeness", "On record with redress to the hearer's positive face (wish to be liked and approved of): friendliness, solidarity, compliments, in-group language."),
         ...under("Positive politeness", posLabels),
-        opt("Negative politeness", "Strategies oriented to the hearer's negative face."),
+        opt("Negative politeness", "On record with redress to the hearer's negative face (wish to be unimpeded): indirectness, hedging, apologising, minimising the imposition, deference."),
         ...under("Negative politeness", negLabels),
-        opt("Off record", "Strategies that leave the act open to interpretation."),
+        opt("Off record", "The FTA is performed indirectly so that it can be denied: hints, irony, understatement, rhetorical questions."),
         ...under("Off record", offLabels),
+        opt("Bald on record", "On record without redress: the FTA is performed directly, clearly and concisely: 'Cancel my appointment.'"),
+        opt("No FTA", "The message contains no face-threatening act, e.g. thanks or a greeting only (or the speaker chooses not to do the FTA)."),
       ],
     },
   ],
@@ -438,33 +430,21 @@ const CONVERSATION_OUTCOMES = {
 
 // The rapport set is built from the project's framework, so an edited framework is used.
 function rapportSet(framework) {
-  const codes = [];
-  for (const d of framework.dimensions) {
-    codes.push({
-      key: `${d.key}_effect`, name: `${d.name}: effect on rapport`, type: "category",
-      definition: `${d.definition} Does this reply build rapport on this dimension, break it, or neither?`,
-      options: [
-        opt("Builds", d.builds.length ? `Shows behaviour that builds rapport, e.g. ${d.builds.slice(0, 3).join("; ").toLowerCase()}.` : "Builds rapport on this dimension."),
-        opt("Neutral", "Neither builds nor breaks rapport on this dimension, or the dimension is not relevant to this reply."),
-        opt("Breaks", d.breaks.length ? `Shows behaviour that breaks rapport, e.g. ${d.breaks.slice(0, 3).join("; ").toLowerCase()}.` : "Breaks rapport on this dimension."),
-      ],
-    });
-    const behaviours = [
-      ...(d.builds.length ? [opt("Builds rapport", "Behaviours that build rapport on this dimension."), ...d.builds.map((b) => opt(b, "", "Builds rapport"))] : []),
-      ...(d.breaks.length ? [opt("Breaks rapport", "Behaviours that break rapport on this dimension."), ...d.breaks.map((b) => opt(b, "", "Breaks rapport"))] : []),
-    ];
-    if (behaviours.length) {
-      codes.push({
-        key: `${d.key}_behaviours`, name: `${d.name}: behaviours`, type: "multi", condition: { codeKey: `${d.key}_effect`, values: ["builds", "breaks"] },
-        definition: `Which of the taxonomy's ${d.name} behaviours this reply shows. Tick all that occur.`,
-        options: behaviours,
-      });
-    }
-  }
+  const codes = framework.dimensions.map((d) => ({
+    key: `${d.key}_effect`, name: `${d.name}: effect on rapport`, type: "multi",
+    definition: `${d.definition} Does this reply build rapport on this dimension, break it, or neither? Tick the behaviours it shows; tick “Builds rapport” or “Breaks rapport” on its own only if none of the behaviours fits.`,
+    options: [
+      opt("Builds rapport", d.builds.length ? `Shows behaviour that builds rapport on this dimension, e.g. ${d.builds.slice(0, 3).join("; ").toLowerCase()}.` : "Builds rapport on this dimension."),
+      ...d.builds.map((b) => opt(b, "", "Builds rapport")),
+      opt("Breaks rapport", d.breaks.length ? `Shows behaviour that breaks rapport on this dimension, e.g. ${d.breaks.slice(0, 3).join("; ").toLowerCase()}.` : "Breaks rapport on this dimension."),
+      ...d.breaks.map((b) => opt(b, "", "Breaks rapport")),
+      opt("Neutral", "Neither builds nor breaks rapport on this dimension, or the dimension is not relevant to this reply. Tick nothing else."),
+    ],
+  }));
   return {
     name: `Rapport: ${framework.name}`,
     appliesTo: "pair",
-    description: "Codes each bot reply (with the user message it answers) for whether it builds or breaks rapport on each dimension of the project's rapport framework, and which of the framework's behaviours it shows.",
+    description: "Codes each bot reply (with the user message it answers) for its effect on rapport on each dimension of the project's rapport framework: whether it builds or breaks rapport, and through which of the framework's behaviours.",
     source: "Dippold, D. Taxonomy of Human-Chatbot Rapport, after Spencer-Oatey & Lazidou's (2024) GAAFFE framework.",
     codes,
   };

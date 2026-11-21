@@ -44,25 +44,28 @@ test("the library offers the five code sets, and the rapport set follows the pro
   const lib = await call("GET", `/api/projects/${projectId}/code-library`);
   assert.deepEqual(lib.data.presets.map((p) => p.id), ["ccsarp_requests", "brown_levinson", "reply_quality", "conversation_outcomes", "rapport"]);
   assert.deepEqual(lib.data.presets.map((p) => p.appliesTo), ["user", "user", "pair", "conversation", "pair"]);
-  assert.equal(lib.data.presets.find((p) => p.id === "rapport").codeCount, 12, "an effect and a behaviours code per GAAFFE dimension");
+  assert.equal(lib.data.presets.find((p) => p.id === "rapport").codeCount, 6, "one effect-on-rapport code per GAAFFE dimension");
 
   const ccsarp = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" });
   const codes = ccsarp.data.set.codes;
   assert.equal(codes.length, 6);
-  assert.deepEqual(codes[0].options.map((o) => o.value), ["request", "no_request"]);
+  assert.deepEqual(codes[0].options.map((o) => o.value), ["no_request", "request_for_information", "request_for_action"]);
   const head = codes.find((c) => c.key === "head_act");
   assert.equal(head.options.length, 12, "3 directness levels with the 9 strategies under them");
   assert.deepEqual(head.options.filter((o) => !o.parent).map((o) => o.value), ["direct", "conventionally_indirect", "non_conventionally_indirect"]);
   assert.equal(head.options.find((o) => o.value === "7_query_preparatory").parent, "conventionally_indirect");
-  assert.ok(codes.slice(1).every((c) => c.condition?.codeKey === "speech_act" && c.condition.values[0] === "request"), "request codes apply only to requests");
+  assert.ok(codes.slice(1).every((c) => c.condition?.codeKey === "request_type" && c.condition.values.join() === "request_for_information,request_for_action"), "request codes apply only to requests");
 
   const bl = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "brown_levinson" });
-  const counts = bl.data.set.codes.map((c) => c.options.length);
-  assert.deepEqual(counts, [5, 43], "superstrategies; then 3 superior categories with the 15 positive, 10 negative and 15 off-record strategies");
+  assert.deepEqual(bl.data.set.codes.map((c) => c.key), ["strategies"], "no separate superstrategy code");
+  const strat = bl.data.set.codes[0];
+  assert.deepEqual(strat.options.filter((o) => !o.parent).map((o) => o.value), ["positive_politeness", "negative_politeness", "off_record", "bald_on_record", "no_fta"]);
+  assert.equal(strat.options.length, 45, "15 positive, 10 negative and 15 off-record strategies under their superior categories");
 
   await call("PUT", `/api/projects/${projectId}/framework`, { framework: { name: "Mine", dimensions: [{ name: "Warmth", definition: "d", builds: ["Friendly"], breaks: ["Cold"] }] } });
   const rapport = await call("POST", `/api/projects/${projectId}/code-library`, { preset: "rapport" });
-  assert.deepEqual(rapport.data.set.codes.map((c) => c.key), ["warmth_effect", "warmth_behaviours"]);
+  assert.deepEqual(rapport.data.set.codes.map((c) => c.key), ["warmth_effect"]);
+  assert.deepEqual(rapport.data.set.codes[0].options.map((o) => [o.label, o.parent ?? null]), [["Builds rapport", null], ["Friendly", "builds_rapport"], ["Breaks rapport", null], ["Cold", "breaks_rapport"], ["Neutral", null]]);
   assert.equal(rapport.data.set.name, "Rapport: Mine");
 });
 
@@ -94,7 +97,7 @@ test("units are listed per set type, and coding by hand respects conditions", as
   const thanks = units.data.units.find((u) => u.text === "Thanks!");
 
   const saved = await call("PUT", `/api/code-sets/${set.id}/units/${polite.unitId}`, {
-    values: { speech_act: "request", head_act: "7_query_preparatory", perspective: "hearer_oriented", internal_modification: ["downtoner", "nonsense"], alerters: ["attention_getter_greeting"] },
+    values: { request_type: "request_for_action", head_act: "7_query_preparatory", perspective: "hearer_oriented", internal_modification: ["downtoner", "nonsense"], alerters: ["attention_getter_greeting"] },
     isExample: true,
   });
   assert.equal(saved.status, 200, JSON.stringify(saved.data));
@@ -102,8 +105,8 @@ test("units are listed per set type, and coding by hand respects conditions", as
   assert.deepEqual(saved.data.human.internal_modification.value, ["downtoner"], "unknown categories are dropped");
   assert.equal(saved.data.isExample, true);
 
-  const noRequest = await call("PUT", `/api/code-sets/${set.id}/units/${thanks.unitId}`, { values: { speech_act: "no_request", head_act: "1_mood_derivable" } });
-  assert.deepEqual(Object.keys(noRequest.data.human), ["speech_act"], "request codes do not apply to a non-request");
+  const noRequest = await call("PUT", `/api/code-sets/${set.id}/units/${thanks.unitId}`, { values: { request_type: "no_request", head_act: "1_mood_derivable" } });
+  assert.deepEqual(Object.keys(noRequest.data.human), ["request_type"], "request codes do not apply to a non-request");
 
   const notMine = await call("GET", `/api/code-sets/${set.id}/units?status=not_coded_by_me`);
   assert.equal(notMine.data.total, 1);
@@ -125,8 +128,8 @@ test("the AI codes a unit using the scheme and the researcher's examples, and ag
   const units = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units;
   const polite = units.find((u) => /possibly/.test(u.text));
   const blunt = units.find((u) => /now/.test(u.text));
-  await call("PUT", `/api/code-sets/${set.id}/units/${polite.unitId}`, { values: { speech_act: "request", head_act: "7_query_preparatory" }, isExample: true });
-  await call("PUT", `/api/code-sets/${set.id}/units/${blunt.unitId}`, { values: { speech_act: "request", head_act: "1_mood_derivable" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${polite.unitId}`, { values: { request_type: "request_for_information", head_act: "7_query_preparatory" }, isExample: true });
+  await call("PUT", `/api/code-sets/${set.id}/units/${blunt.unitId}`, { values: { request_type: "request_for_information", head_act: "1_mood_derivable" } });
 
   const est = await call("POST", `/api/code-sets/${set.id}/estimate`, { count: 10, unitId: blunt.unitId });
   assert.ok(est.data.costUsd > 0);
@@ -134,7 +137,7 @@ test("the AI codes a unit using the scheme and the researcher's examples, and ag
 
   const coded = await call("POST", `/api/code-sets/${set.id}/units/${blunt.unitId}/ai`);
   assert.equal(coded.status, 200, JSON.stringify(coded.data));
-  assert.equal(coded.data.ai.speech_act.value, "request");
+  assert.equal(coded.data.ai.request_type.value, "request_for_information");
   assert.equal(coded.data.ai.head_act.value, "5_want_statement");
   assert.match(coded.data.ai.head_act.explanation, /head_act/);
   assert.equal(coded.data.exampleCount, 1);
@@ -142,7 +145,7 @@ test("the AI codes a unit using the scheme and the researcher's examples, and ag
   const req = claude.calls.at(-1);
   assert.match(req.system, /CODING SCHEME: CCSARP: requests/);
   assert.match(req.system, /Example 1[\s\S]*could you possibly tell me[\s\S]*head_act: 7_query_preparatory/, "the researcher's example is shown with its codes");
-  assert.match(req.system, /Applies only when Contains a request is Request/);
+  assert.match(req.system, /Applies only when Request type is Request for information or Request for action/);
   assert.match(req.messages[0].content, /USER MESSAGE TO CODE\nCancel my appointment now\./);
   assert.doesNotMatch(req.system + req.messages[0].content, /scenario|personaName|"kind"|Polite request/i, "the AI codes blind to conversation metadata (type, title, scenario, persona)");
   assert.ok(req.schema.properties.head_act.properties.applies, "conditional codes say whether they apply");
@@ -150,7 +153,7 @@ test("the AI codes a unit using the scheme and the researcher's examples, and ag
   await call("POST", `/api/code-sets/${set.id}/units/${polite.unitId}/ai`);
   const agr = await call("GET", `/api/code-sets/${set.id}/agreement`);
   assert.equal(agr.data.unitsCodedByBoth, 2);
-  const speech = agr.data.codes.find((c) => c.key === "speech_act");
+  const speech = agr.data.codes.find((c) => c.key === "request_type");
   assert.equal(speech.n, 2);
   assert.equal(speech.percentAgreement, 1);
   const head = agr.data.codes.find((c) => c.key === "head_act");
@@ -161,7 +164,7 @@ test("the AI codes a unit using the scheme and the researcher's examples, and ag
 
   const accepted = await call("POST", `/api/code-sets/${set.id}/units/${blunt.unitId}/accept-ai`, { codeKey: "head_act" });
   assert.equal(accepted.data.human.head_act.value, "5_want_statement");
-  assert.equal(accepted.data.human.speech_act.value, "request", "other codes are kept");
+  assert.equal(accepted.data.human.request_type.value, "request_for_information", "other codes are kept");
 
   const s = (await call("PATCH", `/api/codes/${set.codes[1].id}`, { definition: "Changed." })).data.set;
   const after = await call("GET", `/api/code-sets/${set.id}/agreement`);
@@ -208,14 +211,14 @@ test("coding only some codes keeps the others, for you and for the AI", async (t
   const { call, projectId } = await setup(t, { claude });
   const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" })).data.set;
   const unit = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units.find((u) => /possibly/.test(u.text));
-  await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values: { speech_act: "request", head_act: "7_query_preparatory", perspective: "hearer_oriented" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values: { request_type: "request_for_action", head_act: "7_query_preparatory", perspective: "hearer_oriented" } });
   // Now code only the internal modification: head act and perspective stay.
-  const later = await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { codeKeys: ["internal_modification"], values: { speech_act: "request", internal_modification: ["downtoner", "conditional"] } });
-  assert.deepEqual(Object.keys(later.data.human).sort(), ["head_act", "internal_modification", "perspective", "speech_act"]);
+  const later = await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { codeKeys: ["internal_modification"], values: { request_type: "request_for_action", internal_modification: ["downtoner", "conditional"] } });
+  assert.deepEqual(Object.keys(later.data.human).sort(), ["head_act", "internal_modification", "perspective", "request_type"]);
   assert.equal(later.data.human.head_act.value, "7_query_preparatory");
   // Status filters follow the chosen codes.
   const notYet = await call("GET", `/api/code-sets/${set.id}/units?status=not_coded_by_me&codes=alerters`);
-  assert.ok(notYet.data.units.some((u) => u.unitId === unit.unitId) === false, "speech_act (needed by alerters) counts as coded");
+  assert.ok(notYet.data.units.some((u) => u.unitId === unit.unitId) === false, "request_type (needed by alerters) counts as coded");
 
   // The AI codes only the head act (plus "contains a request", which it depends on).
   await call("POST", `/api/code-sets/${set.id}/units/${unit.unitId}/ai`);
@@ -223,7 +226,7 @@ test("coding only some codes keeps the others, for you and for the AI", async (t
   const partial = await call("POST", `/api/code-sets/${set.id}/units/${unit.unitId}/ai`, { codeKeys: ["head_act"] });
   assert.equal(partial.status, 200, JSON.stringify(partial.data));
   const req = claude.calls[before];
-  assert.deepEqual(Object.keys(req.schema.properties).sort(), ["head_act", "speech_act"]);
+  assert.deepEqual(Object.keys(req.schema.properties).sort(), ["head_act", "request_type"]);
   assert.doesNotMatch(req.system, /### perspective/);
   assert.match(req.system, /indented categories are subordinate/);
   assert.ok(partial.data.ai.perspective, "the AI's other codes are kept");
@@ -237,8 +240,8 @@ test("agreement is also measured at the level of superior categories", async (t)
   const set = (await call("POST", `/api/projects/${projectId}/code-library`, { preset: "ccsarp_requests" })).data.set;
   const units = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units.filter((u) => u.text !== "Thanks!");
   // The fake AI codes "5 Want statement" (direct). Code one unit 5 (same) and one 4 (same level, other strategy).
-  await call("PUT", `/api/code-sets/${set.id}/units/${units[0].unitId}`, { values: { speech_act: "request", head_act: "5_want_statement" } });
-  await call("PUT", `/api/code-sets/${set.id}/units/${units[1].unitId}`, { values: { speech_act: "request", head_act: "4_obligation_statement" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${units[0].unitId}`, { values: { request_type: "request_for_action", head_act: "5_want_statement" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${units[1].unitId}`, { values: { request_type: "request_for_action", head_act: "4_obligation_statement" } });
   for (const u of units) await call("POST", `/api/code-sets/${set.id}/units/${u.unitId}/ai`, { codeKeys: ["head_act"] });
   const agr = await call("GET", `/api/code-sets/${set.id}/agreement`);
   const head = agr.data.codes.find((c) => c.key === "head_act");
@@ -258,8 +261,8 @@ test("notes: memos on codes stay private, and notes made while coding are kept",
   assert.equal(edited.version, 1, "a memo does not change what the code means");
 
   const unit = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units.find((u) => /possibly/.test(u.text));
-  await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values: { speech_act: "request", head_act: "7_query_preparatory" }, notes: { head_act: "Could also be a hedged want statement." } });
-  const later = await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { codeKeys: ["perspective"], values: { speech_act: "request", perspective: "hearer_oriented" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { values: { request_type: "request_for_action", head_act: "7_query_preparatory" }, notes: { head_act: "Could also be a hedged want statement." } });
+  const later = await call("PUT", `/api/code-sets/${set.id}/units/${unit.unitId}`, { codeKeys: ["perspective"], values: { request_type: "request_for_action", perspective: "hearer_oriented" } });
   assert.equal(later.data.human.head_act.explanation, "Could also be a hedged want statement.", "notes survive coding other codes");
 
   await call("POST", `/api/code-sets/${set.id}/units/${unit.unitId}/ai`);
@@ -272,8 +275,8 @@ test("applied codes are counted per category, with totals for superior categorie
   const units = (await call("GET", `/api/code-sets/${set.id}/units`)).data.units;
   const polite = units.find((u) => /possibly/.test(u.text));
   const blunt = units.find((u) => /now/.test(u.text));
-  await call("PUT", `/api/code-sets/${set.id}/units/${polite.unitId}`, { values: { speech_act: "request", head_act: "7_query_preparatory" } });
-  await call("PUT", `/api/code-sets/${set.id}/units/${blunt.unitId}`, { values: { speech_act: "request", head_act: "conventionally_indirect" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${polite.unitId}`, { values: { request_type: "request_for_action", head_act: "7_query_preparatory" } });
+  await call("PUT", `/api/code-sets/${set.id}/units/${blunt.unitId}`, { values: { request_type: "request_for_action", head_act: "conventionally_indirect" } });
   await call("POST", `/api/code-sets/${set.id}/units/${blunt.unitId}/ai`);
   const f = await call("GET", `/api/code-sets/${set.id}/frequencies`);
   assert.equal(f.status, 200, JSON.stringify(f.data));

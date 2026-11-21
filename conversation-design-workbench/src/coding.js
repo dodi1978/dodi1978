@@ -112,7 +112,7 @@ export function codingRoutes({ HttpError, loadProject, requireText, logClaude })
 
   async function listPresets({ db }, { id }) {
     const framework = frameworkOf(await loadProject(db, id));
-    return { presets: presetList(framework).map((p) => ({ id: p.id, name: p.name, appliesTo: p.appliesTo, description: p.description, source: p.source, codeCount: p.codes.length, codeNames: p.codes.map((c) => c.name) })) };
+    return { presets: presetList(framework).map((p) => ({ id: p.id, name: p.name, appliesTo: p.appliesTo, description: p.description, source: p.source, codeCount: p.codes.length, codeNames: p.codes.map((c) => c.name), codes: presetCodes(p).map((c) => ({ name: c.name, options: c.options ?? null })) })) };
   }
 
   async function addPreset({ db }, { id }, body) {
